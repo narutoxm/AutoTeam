@@ -1,6 +1,6 @@
 import time
 
-from autoteam import accounts
+from autoteam import accounts, mailbox_store
 
 
 def test_add_and_update_account_persists_data(tmp_path, monkeypatch):
@@ -87,3 +87,26 @@ def test_get_standby_accounts_orders_recovered_first_and_skips_main_account(tmp_
     assert standby[1]["_quota_recovered"] is True
     assert standby[2]["_quota_recovered"] is False
     assert accounts.get_next_reusable_account()["email"] == "always@example.com"
+
+
+def test_add_account_persists_mailbox_to_independent_store(tmp_path, monkeypatch):
+    accounts_file = tmp_path / "accounts.json"
+    mailbox_store_file = tmp_path / "mailboxes.json"
+    monkeypatch.setattr(accounts, "ACCOUNTS_FILE", accounts_file)
+    monkeypatch.setattr(mailbox_store, "MAILBOX_STORE_FILE", mailbox_store_file)
+    monkeypatch.setattr(accounts, "get_admin_email", lambda: "")
+
+    accounts.add_account(
+        "user@cfe.example.com",
+        "secret",
+        email_provider="cloudflare_temp_email",
+        mailbox={
+            "address": "user@cfe.example.com",
+            "jwt_token": "jwt-token",
+            "mailbox_password": "",
+        },
+    )
+
+    saved = mailbox_store.get_saved_mailbox("user@cfe.example.com")
+
+    assert saved["jwt_token"] == "jwt-token"

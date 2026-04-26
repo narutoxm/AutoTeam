@@ -79,16 +79,17 @@ def test_post_setup_save_keeps_cpa_url_required_and_generates_api_key(monkeypatc
         written[key] = value
 
     monkeypatch.setattr("autoteam.setup_wizard._write_env", fake_write_env)
-    monkeypatch.setattr("autoteam.setup_wizard._verify_cloudmail", lambda: True)
+    monkeypatch.setattr("autoteam.setup_wizard._verify_email_provider", lambda provider=None: True)
     monkeypatch.setattr("autoteam.setup_wizard._verify_cpa", lambda: True)
+    monkeypatch.setattr("autoteam.setup_wizard._reload_runtime_modules", lambda: None)
     monkeypatch.setattr("secrets.token_urlsafe", lambda _n: "generated-token")
-    monkeypatch.setattr("importlib.reload", lambda module: module)
     monkeypatch.setattr(api, "API_KEY", "")
     monkeypatch.delenv("CPA_URL", raising=False)
     monkeypatch.delenv("API_KEY", raising=False)
 
     result = api.post_setup_save(
         api.SetupConfig(
+            EMAIL_PROVIDER="cloudmail",
             CLOUDMAIL_BASE_URL="http://mail.example.com",
             CLOUDMAIL_EMAIL="admin@example.com",
             CLOUDMAIL_PASSWORD="secret",

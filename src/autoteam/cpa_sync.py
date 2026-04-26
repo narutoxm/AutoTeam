@@ -11,10 +11,17 @@ from pathlib import Path
 import requests
 
 from autoteam.auth_storage import AUTH_DIR, ensure_auth_dir, ensure_auth_file_permissions
-from autoteam.config import CPA_KEY, CPA_URL
+from autoteam.config import CPA_KEY, CPA_SYNC_ENABLED, CPA_URL
 from autoteam.textio import write_text
 
 logger = logging.getLogger(__name__)
+
+
+def _sync_enabled():
+    if CPA_SYNC_ENABLED:
+        return True
+    logger.info("[CPA] 已禁用自动同步，跳过本次操作")
+    return False
 
 
 def _headers():
@@ -312,6 +319,7 @@ def sync_from_cpa():
     - 不删除本地账号记录，仅补充/更新 auth_file
     """
     from autoteam.accounts import STATUS_STANDBY, find_account, load_accounts, save_accounts
+    from autoteam.mail_provider import detect_email_provider_for_address
 
     AUTH_DIR.mkdir(exist_ok=True)
 
@@ -472,6 +480,8 @@ def sync_from_cpa():
                     "email": email,
                     "password": "",
                     "cloudmail_account_id": None,
+                    "email_provider": detect_email_provider_for_address(email),
+                    "mailbox": None,
                     "status": STATUS_STANDBY,
                     "auth_file": resolved_path,
                     "quota_exhausted_at": None,
@@ -522,6 +532,9 @@ def sync_to_cpa():
     - CPA 有但不是 active（或本地已删除）→ 从 CPA 删除
     """
     from autoteam.accounts import STATUS_ACTIVE, load_accounts, save_accounts
+
+    if not _sync_enabled():
+        return {"skipped": True, "reason": "disabled"}
 
     accounts = load_accounts()
     local_emails = {a["email"].lower() for a in accounts}
@@ -581,6 +594,9 @@ def sync_to_cpa():
 
 def sync_main_codex_to_cpa(filepath):
     """同步主号 Codex 认证文件到 CPA。"""
+    if not _sync_enabled():
+        return {"skipped": True, "reason": "disabled"}
+
     filepath = Path(filepath)
     if not filepath.exists():
         raise FileNotFoundError(f"主号认证文件不存在: {filepath}")
@@ -602,6 +618,9 @@ def sync_main_codex_to_cpa(filepath):
 
 def delete_main_codex_from_cpa():
     """删除 CPA 中的主号 Codex 认证文件。"""
+    if not _sync_enabled():
+        return {"skipped": True, "reason": "disabled", "deleted": [], "count": 0}
+
     existing = list_cpa_files()
     deleted = []
 

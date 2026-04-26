@@ -47,17 +47,37 @@ def find_account(accounts, email):
     return None
 
 
-def add_account(email, password, cloudmail_account_id=None):
+def add_account(email, password, cloudmail_account_id=None, email_provider=None, mailbox=None):
     """添加新账号"""
+    from autoteam.mail_provider import (
+        build_account_mailbox,
+        detect_email_provider_for_address,
+        get_default_email_provider,
+        persist_account_mailbox,
+    )
+
     accounts = load_accounts()
     if find_account(accounts, email):
         return  # 已存在
+
+    provider = (
+        email_provider
+        or ("cloudmail" if cloudmail_account_id not in (None, "") else None)
+        or detect_email_provider_for_address(email)
+        or get_default_email_provider()
+    )
+    mailbox_data = build_account_mailbox(provider, mailbox if mailbox is not None else cloudmail_account_id, email=email)
+    persist_account_mailbox(email, provider, mailbox_data)
+    if cloudmail_account_id in (None, "") and isinstance(mailbox_data, dict):
+        cloudmail_account_id = mailbox_data.get("account_id")
 
     accounts.append(
         {
             "email": email,
             "password": password,
             "cloudmail_account_id": cloudmail_account_id,
+            "email_provider": provider,
+            "mailbox": mailbox_data,
             "status": STATUS_PENDING,
             "auth_file": None,  # CPA 认证文件路径
             "quota_exhausted_at": None,  # 额度用完的时间

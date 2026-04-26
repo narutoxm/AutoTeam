@@ -350,7 +350,7 @@ async function kickAccount(email) {
 async function removeAccount(email) {
   if (actionDisabled.value) return
 
-  const ok = window.confirm(`确认删除账号 ${email}？\n这会同时清理本地记录、CPA、Team/Invite 和 CloudMail。`)
+  const ok = window.confirm(`确认删除账号 ${email}？\n这会同时清理本地记录、CPA、Team/Invite 和临时邮箱资源。`)
   if (!ok) return
 
   actionEmail.value = email

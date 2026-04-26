@@ -8,6 +8,7 @@ from autoteam.accounts import find_account, load_accounts, save_accounts
 from autoteam.admin_state import get_chatgpt_account_id
 from autoteam.cloudmail import CloudMailClient
 from autoteam.cpa_sync import delete_from_cpa, list_cpa_files, sync_to_cpa
+from autoteam.mail_provider import get_account_email_provider, get_account_mailbox
 
 logger = logging.getLogger(__name__)
 
@@ -159,14 +160,15 @@ def delete_managed_account(
             cleanup["local_record"] = True
             logger.info("[账号] 已删除本地记录: %s", email)
 
-            cloudmail_account_id = acc.get("cloudmail_account_id")
-            if remove_cloudmail and cloudmail_account_id:
+            mailbox_ref = get_account_mailbox(acc)
+            if remove_cloudmail and mailbox_ref:
                 try:
-                    if mail_client is None:
-                        own_mail_client = CloudMailClient()
+                    expected_provider = get_account_email_provider(acc)
+                    if mail_client is None or getattr(mail_client, "provider_name", "") != expected_provider:
+                        own_mail_client = CloudMailClient(account=acc)
                         own_mail_client.login()
                         mail_client = own_mail_client
-                    resp = mail_client.delete_account(cloudmail_account_id)
+                    resp = mail_client.delete_account(mailbox_ref)
                     if resp.get("code") == 200:
                         cleanup["cloudmail_deleted"] = True
                 except Exception as exc:

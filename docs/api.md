@@ -1,6 +1,6 @@
 # HTTP API 文档
 
-启动后访问 `http://localhost:8787/docs` 查看 Swagger 交互式文档。
+启动后访问 `http://localhost:8786/docs` 查看 Swagger 交互式文档。
 
 所有 `/api/*` 端点需要：
 
@@ -121,19 +121,19 @@ Authorization: Bearer <API_KEY>
 ```bash
 # 查看账号状态
 curl -H "Authorization: Bearer YOUR_KEY" \
-  http://localhost:8787/api/status
+  http://localhost:8786/api/status
 
 # 触发轮转
 curl -X POST -H "Authorization: Bearer YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{"target": 5}' \
-  http://localhost:8787/api/tasks/rotate
+  http://localhost:8786/api/tasks/rotate
 
 # 从 CPA 拉取认证文件到本地
 curl -X POST -H "Authorization: Bearer YOUR_KEY" \
-  http://localhost:8787/api/sync/from-cpa
+  http://localhost:8786/api/sync/from-cpa
 
 # 生成手动 OAuth 链接
 curl -X POST -H "Authorization: Bearer YOUR_KEY" \
-  http://localhost:8787/api/manual-account/start
+  http://localhost:8786/api/manual-account/start
 ```

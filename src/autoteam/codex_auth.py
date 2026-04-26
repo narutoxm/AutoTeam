@@ -20,7 +20,8 @@ from autoteam.admin_state import (
     get_chatgpt_workspace_name,
 )
 from autoteam.auth_storage import AUTH_DIR, ensure_auth_dir, ensure_auth_file_permissions
-from autoteam.config import get_playwright_launch_options
+from autoteam.config import get_playwright_launch_options, get_requests_proxy_dict
+from autoteam.mail_provider import get_message_key
 from autoteam.textio import write_text
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,13 @@ def _exchange_auth_code(auth_code, code_verifier, fallback_email=None):
 
     import requests
 
+    request_kwargs = {
+        "headers": {"Content-Type": "application/x-www-form-urlencoded"},
+    }
+    proxies = get_requests_proxy_dict()
+    if proxies:
+        request_kwargs["proxies"] = proxies
+
     resp = requests.post(
         CODEX_TOKEN_URL,
         data={
@@ -90,7 +98,7 @@ def _exchange_auth_code(auth_code, code_verifier, fallback_email=None):
             "redirect_uri": CODEX_REDIRECT_URI,
             "code_verifier": code_verifier,
         },
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        **request_kwargs,
     )
 
     if resp.status_code != 200:
@@ -247,6 +255,50 @@ def _wait_for_otp_submit_result(page, timeout=12):
     return "pending", None
 
 
+def _snapshot_existing_message_keys(mail_client, email, size=10):
+    if not mail_client:
+        return set()
+
+    try:
+        return {
+            key
+            for key in (get_message_key(message) for message in mail_client.search_emails_by_recipient(email, size=size))
+            if key
+        }
+    except Exception:
+        return set()
+
+
+def _wait_for_login_otp(
+    mail_client,
+    email,
+    *,
+    timeout=120,
+    poll_interval=3,
+    baseline_keys=None,
+    used_keys=None,
+    account_id=None,
+):
+    if not mail_client:
+        return None, ""
+
+    ignore_keys = set(baseline_keys or set())
+    ignore_keys.update(used_keys or set())
+
+    try:
+        return mail_client.wait_for_code(
+            email,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            account_id=account_id,
+            ignore_message_keys=ignore_keys,
+            skip_invites=True,
+        )
+    except Exception as exc:
+        logger.warning("[Codex] 邮箱验证码轮询异常: %s", exc)
+        return None, ""
+
+
 def login_codex_via_browser(email, password, mail_client=None):
     """
     通过 Playwright 自动完成 Codex OAuth 登录。
@@ -255,7 +307,7 @@ def login_codex_via_browser(email, password, mail_client=None):
     """
     code_verifier, code_challenge = _generate_pkce()
     state = secrets.token_urlsafe(16)
-    _used_email_ids: set[int] = set()  # 记录已尝试过的邮件，避免重复提交同一封验证码邮件
+    _used_email_ids: set[str] = set()  # 记录已尝试过的邮件，避免重复提交同一封验证码邮件
 
     chatgpt_account_id = get_chatgpt_account_id()
 
@@ -298,14 +350,7 @@ def login_codex_via_browser(email, password, mail_client=None):
             logger.debug("[Codex] 登录前已注入 _account cookie = %s", chatgpt_account_id)
 
         # 在登录开始前记录当前最新邮件 ID，后续只接受比这个更新的
-        _email_id_before_login = 0
-        if mail_client:
-            try:
-                _pre = mail_client.search_emails_by_recipient(email, size=1)
-                if _pre:
-                    _email_id_before_login = _pre[0].get("emailId", 0)
-            except Exception:
-                pass
+        _message_keys_before_login = _snapshot_existing_message_keys(mail_client, email)
 
         logger.info("[Codex] 先登录 ChatGPT 选择 Team workspace...")
         _page = context.new_page()
@@ -363,22 +408,15 @@ def login_codex_via_browser(email, password, mail_client=None):
         try:
             ci = _page.locator('input[name="code"]').first
             if ci.is_visible(timeout=5000) and mail_client:
-                logger.info("[Codex] ChatGPT 登录需要验证码，等待 emailId > %d 的新邮件...", _email_id_before_login)
-                otp = None
-                otp_email_id = 0
-                t0 = time.time()
-                while time.time() - t0 < 120:
-                    for em in mail_client.search_emails_by_recipient(email, size=5):
-                        email_id = em.get("emailId", 0)
-                        if email_id <= _email_id_before_login or email_id in _used_email_ids:
-                            continue
-                        otp = mail_client.extract_verification_code(em)
-                        if otp:
-                            otp_email_id = email_id
-                            break
-                    if otp:
-                        break
-                    time.sleep(3)
+                logger.info("[Codex] ChatGPT 登录需要验证码，等待新邮件...")
+                otp, otp_email_id = _wait_for_login_otp(
+                    mail_client,
+                    email,
+                    timeout=120,
+                    poll_interval=3,
+                    baseline_keys=_message_keys_before_login,
+                    used_keys=_used_email_ids,
+                )
                 if otp:
                     _used_email_ids.add(otp_email_id)
                     ci.fill(otp)
@@ -512,27 +550,15 @@ def login_codex_via_browser(email, password, mail_client=None):
             code_input = None
 
         if code_input and mail_client:
-            logger.info("[Codex] 需要登录验证码，等待 emailId > %d 的新邮件...", _email_id_before_login)
-
-            start_t = time.time()
-            otp_code = None
-            otp_email_id = 0
-            while time.time() - start_t < 120:
-                emails = mail_client.search_emails_by_recipient(email, size=5)
-                for em in emails:
-                    email_id = em.get("emailId", 0)
-                    if email_id <= _email_id_before_login or email_id in _used_email_ids:
-                        continue
-                    subj = em.get("subject", "").lower()
-                    if "invited" in subj or "invitation" in subj:
-                        continue
-                    otp_code = mail_client.extract_verification_code(em)
-                    if otp_code:
-                        otp_email_id = email_id
-                        break
-                if otp_code:
-                    break
-                time.sleep(3)
+            logger.info("[Codex] 需要登录验证码，等待新邮件...")
+            otp_code, otp_email_id = _wait_for_login_otp(
+                mail_client,
+                email,
+                timeout=120,
+                poll_interval=3,
+                baseline_keys=_message_keys_before_login,
+                used_keys=_used_email_ids,
+            )
 
             if otp_code:
                 _used_email_ids.add(otp_email_id)
@@ -739,37 +765,34 @@ def login_codex_via_browser(email, password, mail_client=None):
                 otp_input = page.locator(_OTP_INPUT_SELECTORS).first
                 if otp_input.is_visible(timeout=2000) and mail_client:
                     logger.info(
-                        "[Codex] 需要邮箱验证码 (step %d)，等待 emailId > %d 的新邮件...",
+                        "[Codex] 需要邮箱验证码 (step %d)，等待新邮件...",
                         step + 1,
-                        _email_id_before_login,
                     )
                     otp = None
-                    otp_email_id = 0
+                    otp_email_id = ""
                     page_left_code = False
                     t0 = time.time()
-                    while time.time() - t0 < 120:
+                    last_wait_log_at = -999
+                    while time.time() - t0 < 120 and not otp:
                         if not _is_otp_input_visible(page, timeout=300):
                             page_left_code = True
                             logger.info("[Codex] 验证码页已退出，继续后续授权流程")
                             break
-                        for em in mail_client.search_emails_by_recipient(email, size=5):
-                            # 只接受比快照更新的邮件
-                            email_id = em.get("emailId", 0)
-                            if email_id <= _email_id_before_login or email_id in _used_email_ids:
-                                continue
-                            sender = (em.get("sendEmail") or "").lower()
-                            if "openai" not in sender and "chatgpt" not in sender:
-                                continue
-                            subj = (em.get("subject") or "").lower()
-                            if "invited" in subj or "invitation" in subj:
-                                continue
-                            otp = mail_client.extract_verification_code(em)
-                            if otp:
-                                otp_email_id = email_id
-                                break
-                        if otp:
-                            break
-                        time.sleep(3)
+
+                        remaining = min(2, max(1, 120 - int(time.time() - t0)))
+                        otp, otp_email_id = _wait_for_login_otp(
+                            mail_client,
+                            email,
+                            timeout=remaining,
+                            poll_interval=1,
+                            baseline_keys=_message_keys_before_login,
+                            used_keys=_used_email_ids,
+                        )
+                        if not otp:
+                            elapsed = int(time.time() - t0)
+                            if elapsed - last_wait_log_at >= 6:
+                                logger.info("[Codex] 暂未获取到新验证码，继续轮询邮箱... (%ds)", elapsed)
+                                last_wait_log_at = elapsed
                     if otp:
                         submit_ok = False
                         for submit_attempt in range(1, 3):
@@ -1432,12 +1455,16 @@ def check_codex_quota(access_token, account_id=None):
     if account_id:
         headers["Chatgpt-Account-Id"] = account_id
 
+    request_kwargs = {
+        "headers": headers,
+        "timeout": 30,
+    }
+    proxies = get_requests_proxy_dict()
+    if proxies:
+        request_kwargs["proxies"] = proxies
+
     try:
-        resp = requests.get(
-            "https://chatgpt.com/backend-api/wham/usage",
-            headers=headers,
-            timeout=30,
-        )
+        resp = requests.get("https://chatgpt.com/backend-api/wham/usage", **request_kwargs)
     except Exception as e:
         logger.error("[Codex] 请求异常: %s", e)
         return "auth_error", None
@@ -1476,6 +1503,13 @@ def refresh_access_token(refresh_token):
     """刷新 access token"""
     import requests
 
+    request_kwargs = {
+        "headers": {"Content-Type": "application/x-www-form-urlencoded"},
+    }
+    proxies = get_requests_proxy_dict()
+    if proxies:
+        request_kwargs["proxies"] = proxies
+
     resp = requests.post(
         CODEX_TOKEN_URL,
         data={
@@ -1484,7 +1518,7 @@ def refresh_access_token(refresh_token):
             "refresh_token": refresh_token,
             "scope": "openid profile email",
         },
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        **request_kwargs,
     )
 
     if resp.status_code != 200:

@@ -57,6 +57,14 @@ from autoteam.codex_auth import (
 )
 from autoteam.config import get_playwright_launch_options
 from autoteam.cpa_sync import sync_from_cpa, sync_main_codex_to_cpa, sync_to_cpa
+from autoteam.mail_provider import (
+    build_account_mailbox,
+    detect_email_provider_for_address,
+    get_account_email_provider,
+    get_account_mailbox,
+    get_all_managed_domains,
+    is_managed_account,
+)
 from autoteam.textio import read_text, write_text
 
 logger = logging.getLogger(__name__)
@@ -97,6 +105,18 @@ def _auto_reuse_skip_reason(acc: dict | None) -> str | None:
     return None
 
 
+def _can_auto_fetch_mail(acc: dict | None) -> bool:
+    acc = acc or {}
+    provider = detect_email_provider_for_address(acc.get("email")) or get_account_email_provider(acc)
+    mailbox_ref = get_account_mailbox(acc)
+    mailbox = build_account_mailbox(provider, mailbox_ref, email=acc.get("email"))
+    if provider == "cloudflare_temp_email":
+        return bool(isinstance(mailbox, dict) and mailbox.get("jwt_token"))
+    if provider == "cloudmail":
+        return bool(isinstance(mailbox, dict) and mailbox.get("account_id"))
+    return bool(mailbox)
+
+
 def sync_account_states(chatgpt_api=None):
     """根据 Team 实际成员列表同步本地账号状态"""
     account_id = get_chatgpt_account_id()
@@ -130,9 +150,7 @@ def sync_account_states(chatgpt_api=None):
             chatgpt_api.stop()
 
     # 对照更新状态
-    from autoteam.config import CLOUDMAIL_DOMAIN
-
-    domain_suffix = CLOUDMAIL_DOMAIN.lstrip("@") if CLOUDMAIL_DOMAIN else ""
+    managed_domains = get_all_managed_domains()
 
     changed = False
     local_email_set = {a["email"].lower() for a in accounts}
@@ -148,17 +166,20 @@ def sync_account_states(chatgpt_api=None):
             acc["status"] = STATUS_STANDBY
             changed = True
 
-    # Team 中有我们域名但本地无记录的成员 → 自动添加
-    if domain_suffix:
+    # Team 中有我们管理域名但本地无记录的成员 → 自动添加
+    if managed_domains:
         for email in team_emails:
             if _is_main_account_email(email):
                 continue
-            if domain_suffix in email and email not in local_email_set:
+            provider = detect_email_provider_for_address(email)
+            if provider and email not in local_email_set:
                 accounts.append(
                     {
                         "email": email,
                         "password": "",
                         "cloudmail_account_id": None,
+                        "email_provider": provider,
+                        "mailbox": None,
                         "status": STATUS_ACTIVE,
                         "auth_file": None,
                         "quota_exhausted_at": None,
@@ -168,7 +189,7 @@ def sync_account_states(chatgpt_api=None):
                     }
                 )
                 changed = True
-                logger.info("[同步] 发现 Team 中新成员: %s（已添加到本地）", email)
+                logger.info("[同步] 发现 Team 中新成员: %s（已添加到本地，但缺少邮箱凭据）", email)
 
     # auths 目录中有认证文件但本地无记录的 → 自动添加为 standby
     from autoteam.codex_auth import AUTH_DIR
@@ -189,6 +210,8 @@ def sync_account_states(chatgpt_api=None):
                         "email": email,
                         "password": "",
                         "cloudmail_account_id": None,
+                        "email_provider": detect_email_provider_for_address(email),
+                        "mailbox": None,
                         "status": status,
                         "auth_file": str(auth_file),
                         "quota_exhausted_at": None,
@@ -368,7 +391,7 @@ def _check_and_refresh(acc):
 
 def cmd_check():
     """只检查 active 账号的额度，无认证文件或 auth_error 的自动重新登录 Codex"""
-    from autoteam.config import AUTO_CHECK_THRESHOLD, CLOUDMAIL_DOMAIN
+    from autoteam.config import AUTO_CHECK_THRESHOLD
 
     # API 运行时配置优先（前端可修改）
     try:
@@ -384,7 +407,6 @@ def cmd_check():
     if pending_accounts:
         logger.info("[检查] 对账 %d 个 pending 账号...", len(pending_accounts))
         chatgpt = None
-        mail_client = None
         deleted_pending = 0
         try:
             chatgpt = ChatGPTTeamAPI()
@@ -407,9 +429,8 @@ def cmd_check():
                     continue
 
                 logger.warning("[检查] pending 账号为失败孤儿，删除: %s", email)
-                if mail_client is None:
-                    mail_client = CloudMailClient()
-                    mail_client.login()
+                mail_client = CloudMailClient(account=acc)
+                mail_client.login()
                 delete_managed_account(
                     email,
                     remove_remote=True,
@@ -441,8 +462,7 @@ def cmd_check():
         if a.get("auth_file") and Path(a["auth_file"]).exists():
             active_with_auth.append(a)
         else:
-            # 只管我们域名的账号
-            if CLOUDMAIL_DOMAIN and CLOUDMAIL_DOMAIN.lstrip("@") in a["email"]:
+            if is_managed_account(a):
                 no_auth_list.append(a)
 
     if not active_with_auth and not no_auth_list:
@@ -566,11 +586,18 @@ def cmd_check():
     # auth_error + 无认证文件的统一重新登录 Codex
     if auth_error_list:
         logger.info("[检查] 重新登录 %d 个 token 失效的账号...", len(auth_error_list))
-        mail_client = CloudMailClient()
-        mail_client.login()
         for acc in auth_error_list:
             email = acc["email"]
             password = acc.get("password", "")
+            if not password and not _can_auto_fetch_mail(acc):
+                logger.warning(
+                    "[%s] 无密码且未保存邮箱凭据（mailbox），无法自动获取邮箱验证码；"
+                    "该账号只能手动重新登录或补回 mailbox 信息",
+                    email,
+                )
+                continue
+            mail_client = CloudMailClient(account=acc)
+            mail_client.login()
             logger.info("[%s] 重新 Codex 登录...", email)
             bundle = login_codex_via_browser(email, password, mail_client=mail_client)
             if bundle:
@@ -666,17 +693,23 @@ def remove_from_team(chatgpt_api, email, *, return_status=False):
 
 
 def invite_to_team(chatgpt_api, email, seat_type="default"):
-    """邀请账号加入 Team。旧账号用 default，新账号用 usage_based。"""
+    """邀请账号加入 Team。若当前 seat_type 被拒绝，则自动回退到另一种类型重试一次。"""
     status, data = chatgpt_api.invite_member(email, seat_type=seat_type)
     if status == 200 and isinstance(data, dict):
         errored = data.get("errored_emails", [])
         if errored:
             err_msg = errored[0].get("error", "unknown")
             logger.warning("[Team] 邀请 %s 被拒绝: %s", email, err_msg)
-            # default 失败则尝试 usage_based
-            if seat_type == "default":
-                logger.info("[Team] 尝试 usage_based 方式...")
-                return invite_to_team(chatgpt_api, email, seat_type="usage_based")
+            fallback_seat_type = "default" if seat_type == "usage_based" else "usage_based"
+            if fallback_seat_type != seat_type:
+                logger.info("[Team] 尝试 %s 方式...", fallback_seat_type)
+                retry_status, retry_data = chatgpt_api.invite_member(email, seat_type=fallback_seat_type)
+                if retry_status == 200 and isinstance(retry_data, dict):
+                    retry_errored = retry_data.get("errored_emails", [])
+                    if not retry_errored:
+                        return True
+                    retry_msg = retry_errored[0].get("error", "unknown")
+                    logger.warning("[Team] %s 方式仍被拒绝: %s", fallback_seat_type, retry_msg)
             return False
     return status == 200
 
@@ -702,6 +735,17 @@ def _complete_registration(email, password, invite_link, mail_client):
         logger.error("[注册] 注册 %s 失败", email)
         return None
 
+    joined = False
+    for _ in range(10):
+        if _is_email_in_team(email):
+            joined = True
+            break
+        time.sleep(3)
+
+    if not joined:
+        logger.error("[注册] %s 邀请注册链接流程结束，但远端仍未确认已加入 Team", email)
+        return None
+
     # Codex 登录
     bundle = login_codex_via_browser(email, password, mail_client=mail_client)
     if bundle:
@@ -713,6 +757,15 @@ def _complete_registration(email, password, invite_link, mail_client):
         update_account(email, status=STATUS_ACTIVE)
         logger.warning("[注册] 账号已加入 Team 但 Codex 登录失败: %s", email)
         return email
+
+
+def _find_invite_link(mail_client, email, *, size=10, account_id=None):
+    emails = mail_client.search_emails_by_recipient(email, size=size, account_id=account_id)
+    for email_data in emails:
+        invite_link = mail_client.extract_invite_link(email_data)
+        if invite_link:
+            return invite_link
+    return None
 
 
 def _check_pending_invites(chatgpt_api, mail_client):
@@ -740,15 +793,18 @@ def _check_pending_invites(chatgpt_api, mail_client):
         inv_email = inv.get("email_address", "")
         logger.info("[Pending] 检查 %s 是否已收到邮件...", inv_email)
 
-        # 从 CloudMail 搜索该邮箱的邀请邮件
-        emails = mail_client.search_emails_by_recipient(inv_email, size=5)
-        invite_link = None
-        for em in emails:
-            sender = em.get("sendEmail", "").lower()
-            if "openai" in sender:
-                invite_link = mail_client.extract_invite_link(em)
-                if invite_link:
-                    break
+        acc = find_account(load_accounts(), inv_email)
+        invite_mail_client = mail_client
+        if acc:
+            invite_mail_client = CloudMailClient(account=acc)
+            invite_mail_client.login()
+
+        invite_link = _find_invite_link(
+            invite_mail_client,
+            inv_email,
+            size=10,
+            account_id=get_account_mailbox(acc),
+        )
 
         if not invite_link:
             logger.info("[Pending] %s 未收到邮件，跳过", inv_email)
@@ -757,7 +813,6 @@ def _check_pending_invites(chatgpt_api, mail_client):
         logger.info("[Pending] %s 已收到邀请邮件，继续注册流程...", inv_email)
 
         # 确保本地有账号记录
-        acc = find_account(load_accounts(), inv_email)
         if acc:
             password = acc.get("password", f"Tmp_{uuid.uuid4().hex[:12]}!")
         else:
@@ -767,7 +822,7 @@ def _check_pending_invites(chatgpt_api, mail_client):
         # 关闭 ChatGPT 浏览器再注册
         chatgpt_api.stop()
 
-        email = _complete_registration(inv_email, password, invite_link, mail_client)
+        email = _complete_registration(inv_email, password, invite_link, invite_mail_client)
         if email:
             completed.append(email)
 
@@ -1182,7 +1237,7 @@ def _complete_direct_about_you(page):
     return False
 
 
-def _register_direct_once(mail_client, email, password, cloudmail_account_id=None):
+def _register_direct_once(mail_client, email, password, mailbox_ref=None):
     """执行一次直接注册，返回是否完成注册并进入 Team。"""
     from playwright.sync_api import sync_playwright
 
@@ -1400,19 +1455,13 @@ def _register_direct_once(mail_client, email, password, cloudmail_account_id=Non
 
         if code_input:
             logger.info("[直接注册] 等待验证码...")
-            verification_code = None
-            start_t = time.time()
-            while time.time() - start_t < MAIL_TIMEOUT:
-                emails = mail_client.search_emails_by_recipient(email, size=10, account_id=cloudmail_account_id)
-                for em in emails:
-                    verification_code = mail_client.extract_verification_code(em)
-                    if verification_code:
-                        break
-                if verification_code:
-                    break
-                elapsed = int(time.time() - start_t)
-                print(f"\r  等待验证码... ({elapsed}s)", end="", flush=True)
-                time.sleep(3)
+            verification_code, _ = mail_client.wait_for_code(
+                email,
+                timeout=MAIL_TIMEOUT,
+                poll_interval=3,
+                account_id=mailbox_ref,
+                skip_invites=True,
+            )
 
             if verification_code:
                 logger.info("[直接注册] 输入验证码: %s", verification_code)
@@ -1464,13 +1513,13 @@ def create_account_direct(mail_client):
     """
     import uuid
 
-    account_id, email = mail_client.create_temp_email()
+    mailbox_ref, email = mail_client.create_temp_email()
     password = f"Tmp_{uuid.uuid4().hex[:12]}!"
 
     success = False
     for attempt in range(3):
         logger.info("[直接注册] 开始第 %d/3 次注册尝试: %s", attempt + 1, email)
-        success = _register_direct_once(mail_client, email, password, cloudmail_account_id=account_id)
+        success = _register_direct_once(mail_client, email, password, mailbox_ref=mailbox_ref)
         if success:
             break
 
@@ -1486,12 +1535,18 @@ def create_account_direct(mail_client):
     if not success:
         logger.error("[直接注册] 连续 3 次注册失败，删除临时账号: %s", email)
         try:
-            mail_client.delete_account(account_id)
+            mail_client.delete_account(mailbox_ref)
         except Exception as exc:
             logger.warning("[直接注册] 删除失败临时邮箱异常: %s", exc)
         return None
 
-    add_account(email, password, cloudmail_account_id=account_id)
+    add_account(
+        email,
+        password,
+        cloudmail_account_id=mailbox_ref.get("account_id") if isinstance(mailbox_ref, dict) else mailbox_ref,
+        email_provider=getattr(mail_client, "provider_name", None),
+        mailbox=mailbox_ref,
+    )
 
     # Step 4: Codex 登录
     bundle = login_codex_via_browser(email, password, mail_client=mail_client)
@@ -1506,10 +1561,58 @@ def create_account_direct(mail_client):
         return email
 
 
+def create_account_via_invite(chatgpt_api, mail_client):
+    """邀请注册模式：发 Team 邀请，读取邮箱里的邀请链接，再完成注册。"""
+    import uuid
+
+    mailbox_ref, email = mail_client.create_temp_email()
+    password = f"Tmp_{uuid.uuid4().hex[:12]}!"
+
+    add_account(
+        email,
+        password,
+        cloudmail_account_id=mailbox_ref.get("account_id") if isinstance(mailbox_ref, dict) else mailbox_ref,
+        email_provider=getattr(mail_client, "provider_name", None),
+        mailbox=mailbox_ref,
+    )
+
+    logger.info("[邀请注册] 创建临时邮箱: %s", email)
+    if not invite_to_team(chatgpt_api, email, seat_type="usage_based"):
+        logger.error("[邀请注册] 发送 Team 邀请失败: %s", email)
+        accounts = [item for item in load_accounts() if item["email"].lower() != email.lower()]
+        save_accounts(accounts)
+        return None
+
+    logger.info("[邀请注册] 已发送 Team 邀请，等待邀请邮件...")
+    invite_link = None
+    try:
+        email_data = mail_client.wait_for_email(
+            to_email=email,
+            timeout=MAIL_TIMEOUT,
+        )
+        invite_link = mail_client.extract_invite_link(email_data)
+        if not invite_link:
+            invite_link = _find_invite_link(mail_client, email, size=10, account_id=mailbox_ref)
+    except TimeoutError:
+        logger.warning("[邀请注册] 等待邀请邮件超时，保留 pending 邀请: %s", email)
+        return None
+    except Exception as exc:
+        logger.warning("[邀请注册] 获取邀请邮件失败，保留 pending 邀请: %s | %s", email, exc)
+        return None
+
+    if not invite_link:
+        logger.warning("[邀请注册] 已收到邮件但未提取到邀请链接，保留 pending 邀请: %s", email)
+        return None
+
+    logger.info("[邀请注册] 提取到邀请链接，开始注册: %s", email)
+    chatgpt_api.stop()
+    return _complete_registration(email, password, invite_link, mail_client)
+
+
 def create_new_account(chatgpt_api, mail_client):
     """
-    创建新账号。优先用直接注册模式（域名自动加入 workspace）。
-    chatgpt_api 可为 None（直接注册不需要）。
+    创建新账号。优先走 Team 邀请邮件注册链接。
+    chatgpt_api 可为 None（此时才退回直接注册）。
     """
     # 先检查 pending invites
     if chatgpt_api and chatgpt_api.browser:
@@ -1519,10 +1622,11 @@ def create_new_account(chatgpt_api, mail_client):
             logger.info("[创建] 从 pending invites 完成了 %d 个账号", len(completed))
             return completed[0]
 
-    # 直接注册模式（不需要邀请）
-    logger.info("[创建] 使用直接注册模式...")
     if chatgpt_api and chatgpt_api.browser:
-        chatgpt_api.stop()
+        logger.info("[创建] 使用邀请邮件注册链接模式...")
+        return create_account_via_invite(chatgpt_api, mail_client)
+
+    logger.info("[创建] 无 Team API 上下文，回退到直接注册模式...")
     return create_account_direct(mail_client)
 
 
@@ -1540,7 +1644,12 @@ def reinvite_account(chatgpt_api, mail_client, acc):
     if chatgpt_api and chatgpt_api.browser:
         chatgpt_api.stop()
 
-    bundle = login_codex_via_browser(email, password, mail_client=mail_client)
+    account_mail_client = mail_client
+    if mail_client is None or getattr(mail_client, "provider_name", "") != get_account_email_provider(acc):
+        account_mail_client = CloudMailClient(account=acc)
+        account_mail_client.login()
+
+    bundle = login_codex_via_browser(email, password, mail_client=account_mail_client)
     if not bundle:
         logger.warning("[轮转] 旧账号 OAuth 登录失败，保持 standby: %s", email)
         update_account(email, status=STATUS_STANDBY)
@@ -2292,7 +2401,7 @@ def main():
 
     api_p = sub.add_parser("api", help="启动 HTTP API 服务器")
     api_p.add_argument("--host", default="0.0.0.0", help="监听地址（默认 0.0.0.0）")
-    api_p.add_argument("--port", type=int, default=8787, help="监听端口（默认 8787）")
+    api_p.add_argument("--port", type=int, default=8786, help="监听端口（默认 8786）")
 
     args = parser.parse_args()
 

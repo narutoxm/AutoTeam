@@ -16,20 +16,31 @@ from autoteam.config import (
     EMAIL_POLL_INTERVAL,
     EMAIL_POLL_TIMEOUT,
 )
+from autoteam.mail_provider import persist_account_mailbox
+from autoteam.mailbox_store import get_saved_mailbox
 
 logger = logging.getLogger(__name__)
 
 _VERIFICATION_CODE_PATTERNS = (
+    r"输入此临时验证码以继续[:：]?\s*(\d{6})",
+    r"Verification code:?\s*(\d{6})",
+    r"code is\s*(\d{6})",
+    r"代码为[:：]?\s*(\d{6})",
+    r"验证码[:：]?\s*(\d{6})",
     r"(?:temporary\s+(?:openai|chatgpt)\s+login\s+code(?:\s+is)?|verification\s+code(?:\s+is)?|login\s+code(?:\s+is)?|code(?:\s+is)?|验证码(?:为|是)?)\D{0,24}(\d{6})",
-    r"\b(\d{6})\b",
+    r">\s*(\d{6})\s*<",
+    r"(?<![#&])\b(\d{6})\b",
 )
 
 
-class CloudMailClient:
+class LegacyCloudMailClient:
+    provider_name = "cloudmail"
+
     def __init__(self):
         self.base_url = CLOUDMAIL_BASE_URL
         self.token = None
         self.session = requests.Session()
+        self._consumed_message_keys = set()
 
     def _headers(self):
         h = {"Content-Type": "application/json"}
@@ -75,6 +86,7 @@ class CloudMailClient:
             raise Exception(f"创建邮箱失败: {resp.get('message')}")
 
         account_id = resp["data"]["accountId"]
+        persist_account_mailbox(email, self.provider_name, {"account_id": account_id})
         logger.info("[CloudMail] 临时邮箱已创建: %s (accountId=%s)", email, account_id)
         return account_id, email
 
@@ -101,6 +113,16 @@ class CloudMailClient:
     @staticmethod
     def _normalize_email(value):
         return str(value or "").strip().lower()
+
+    @staticmethod
+    def _extract_account_id(value):
+        if isinstance(value, dict):
+            for key in ("account_id", "accountId"):
+                account_id = value.get(key)
+                if account_id not in (None, ""):
+                    return account_id
+            return None
+        return value
 
     @staticmethod
     def _html_to_visible_text(value):
@@ -131,13 +153,52 @@ class CloudMailClient:
         if html_text and html_text not in sources:
             sources.append(html_text)
 
+        raw_html = str(email_data.get("content") or "").strip()
+        if raw_html and raw_html not in sources:
+            sources.append(raw_html)
+
         for source in sources:
             for pattern in _VERIFICATION_CODE_PATTERNS:
-                match = re.search(pattern, source, re.IGNORECASE)
-                if match:
-                    return match.group(1)
+                matches = re.findall(pattern, source, re.IGNORECASE)
+                for code in matches:
+                    if code == "177010":
+                        continue
+                    return code
 
         return None
+
+    def wait_for_code(
+        self,
+        to_email,
+        timeout=120,
+        poll_interval=3,
+        account_id=None,
+        ignore_message_keys=None,
+        skip_invites=True,
+    ):
+        ignore_keys = {str(item) for item in (ignore_message_keys or set()) if item}
+        ignore_keys.update(self._consumed_message_keys)
+        deadline = time.time() + max(timeout, 1)
+
+        while time.time() < deadline:
+            emails = self.search_emails_by_recipient(to_email, size=10, account_id=account_id)
+            for email_data in emails:
+                message_key = str(email_data.get("emailId") or email_data.get("messageId") or "")
+                if message_key and message_key in ignore_keys:
+                    continue
+
+                subject = str(email_data.get("subject") or "").lower()
+                if skip_invites and ("invited" in subject or "invitation" in subject):
+                    continue
+
+                code = self.extract_verification_code(email_data)
+                if code:
+                    if message_key:
+                        self._consumed_message_keys.add(message_key)
+                    return code, message_key
+            time.sleep(poll_interval)
+
+        return None, ""
 
     def _resolve_account_id_for_email(self, to_email):
         """优先从本地账号池解析 CloudMail accountId。"""
@@ -150,9 +211,18 @@ class CloudMailClient:
 
             for acc in load_accounts():
                 if self._normalize_email(acc.get("email")) == target:
-                    account_id = acc.get("cloudmail_account_id")
+                    mailbox = acc.get("mailbox") or {}
+                    account_id = mailbox.get("account_id") or acc.get("cloudmail_account_id")
                     if account_id:
                         return account_id
+        except Exception:
+            pass
+
+        try:
+            saved_mailbox = get_saved_mailbox(target) or {}
+            account_id = self._extract_account_id(saved_mailbox)
+            if account_id:
+                return account_id
         except Exception:
             pass
 
@@ -194,7 +264,7 @@ class CloudMailClient:
 
     def search_emails_by_recipient(self, to_email, size=10, account_id=None):
         """优先读取该邮箱自己的收件箱；无法定位 accountId 时再回退到 admin 全局搜索。"""
-        resolved_account_id = account_id or self._resolve_account_id_for_email(to_email)
+        resolved_account_id = self._extract_account_id(account_id) or self._resolve_account_id_for_email(to_email)
         if resolved_account_id:
             emails = self.list_emails(resolved_account_id, size=size)
             if emails:
@@ -338,7 +408,27 @@ class CloudMailClient:
 
     def delete_account(self, account_id):
         """删除临时邮箱账户"""
-        resp = self._delete("/account/delete", {"accountId": account_id})
+        normalized_account_id = self._extract_account_id(account_id)
+        resp = self._delete("/account/delete", {"accountId": normalized_account_id})
         if resp["code"] == 200:
-            logger.info("[CloudMail] 临时邮箱已删除 (accountId=%s)", account_id)
+            logger.info("[CloudMail] 临时邮箱已删除 (accountId=%s)", normalized_account_id)
         return resp
+
+
+class CloudMailClient:
+    """
+    兼容旧导入名的 provider 包装器。
+    当前会按 EMAIL_PROVIDER 或账号记录选择具体实现。
+    """
+
+    def __init__(self, provider=None, account=None):
+        from autoteam.mail_provider import create_mail_client
+
+        self._client = create_mail_client(provider=provider, account=account)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+    @property
+    def provider_name(self):
+        return getattr(self._client, "provider_name", "")

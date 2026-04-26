@@ -92,7 +92,7 @@ PLAYWRIGHT_PROXY_URL=socks5://host.docker.internal:3333
 
 | 命令 | 说明 |
 |------|------|
-| `api` | 启动 Web 面板 + HTTP API（默认端口 8787） |
+| `api` | 启动 Web 面板 + HTTP API（默认端口 8786） |
 | `rotate [N]` | 智能轮转，补满到 N 个（默认 5） |
 | `status` | 查看账号状态 |
 | `check` | 检查额度 |
@@ -108,7 +108,7 @@ PLAYWRIGHT_PROXY_URL=socks5://host.docker.internal:3333
 
 ## Web 管理面板
 
-启动 `uv run autoteam api` 后访问 `http://localhost:8787`。
+启动 `uv run autoteam api` 后访问 `http://localhost:8786`。
 
 | 页面 | 功能 |
 |------|------|

@@ -136,3 +136,31 @@ def test_auto_reuse_skip_reason_detects_google_provider_and_gmail():
         == "Google 登录账号暂不支持自动复用"
     )
     assert manager._auto_reuse_skip_reason({"email": "user@example.com"}) is None
+
+
+def test_check_skips_auto_relogin_when_cloudflare_mailbox_is_missing(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(
+        manager,
+        "load_accounts",
+        lambda: [
+            {
+                "email": "tmp8g57lftukz3@xumin.fun",
+                "password": "",
+                "email_provider": "cloudflare_temp_email",
+                "mailbox": None,
+                "status": manager.STATUS_ACTIVE,
+                "auth_file": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(manager, "sync_account_states", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(manager, "cmd_status", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(manager, "sync_to_cpa", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(manager, "CloudMailClient", lambda *args, **kwargs: events.append("mail_client"))
+    monkeypatch.setattr(manager, "login_codex_via_browser", lambda *args, **kwargs: events.append("login"))
+
+    manager.cmd_check()
+
+    assert events == []

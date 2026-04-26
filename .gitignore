@@ -8,6 +8,7 @@ auth_state/
 auths/
 accounts.json
 state.json
+mailboxes.json
 session
 bearer_token
 test.py

@@ -3,6 +3,13 @@ import types
 from autoteam import accounts, manager
 
 
+class _FakeMailClient:
+    provider_name = "cloudflare_temp_email"
+
+    def login(self):
+        return None
+
+
 def test_reinvite_account_uses_unified_oauth_login_and_marks_active(monkeypatch):
     updates = []
 
@@ -28,6 +35,7 @@ def test_reinvite_account_uses_unified_oauth_login_and_marks_active(monkeypatch)
         "_is_email_in_team",
         lambda email: (_ for _ in ()).throw(AssertionError("should not check team membership separately")),
     )
+    monkeypatch.setattr(manager, "CloudMailClient", lambda *args, **kwargs: _FakeMailClient())
 
     result = manager.reinvite_account(
         types.SimpleNamespace(browser=False),
@@ -71,6 +79,7 @@ def test_reinvite_account_marks_standby_when_oauth_login_returns_non_team(monkey
         "_is_email_in_team",
         lambda email: (_ for _ in ()).throw(AssertionError("should not check team membership separately")),
     )
+    monkeypatch.setattr(manager, "CloudMailClient", lambda *args, **kwargs: _FakeMailClient())
 
     result = manager.reinvite_account(
         types.SimpleNamespace(browser=False),

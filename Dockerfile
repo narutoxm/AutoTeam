@@ -31,7 +31,7 @@ VOLUME ["/app/data"]
 RUN mkdir -p /app/data
 ENV DISPLAY=:99
 
-EXPOSE 8787
+EXPOSE 8786
 
 # 启动脚本
 COPY docker-entrypoint.sh /docker-entrypoint.sh

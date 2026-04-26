@@ -41,7 +41,7 @@ docker compose down
 
 ```bash
 docker build -t autoteam .
-docker run -d -p 8787:8787 -v $(pwd)/data:/app/data autoteam
+docker run -d -p 8786:8786 -v $(pwd)/data:/app/data autoteam
 ```
 
 ## 配置方式
@@ -55,7 +55,7 @@ docker run -d -p 8787:8787 -v $(pwd)/data:/app/data autoteam
 不预先配置直接启动，打开：
 
 ```text
-http://host:8787
+http://host:8786
 ```
 
 浏览器中会显示配置向导页面，填写后自动验证连通性。

@@ -68,12 +68,19 @@ def check_auth(request: Request):
 
 
 class SetupConfig(BaseModel):
+    EMAIL_PROVIDER: str = "cloudflare_temp_email"
     CLOUDMAIL_BASE_URL: str = ""
     CLOUDMAIL_EMAIL: str = ""
     CLOUDMAIL_PASSWORD: str = ""
     CLOUDMAIL_DOMAIN: str = ""
+    CLOUDFLARE_TEMP_EMAIL_API_BASE: str = ""
+    CLOUDFLARE_TEMP_EMAIL_ADMIN_PASSWORD: str = ""
+    CLOUDFLARE_TEMP_EMAIL_DOMAINS: str = ""
+    CLOUDFLARE_TEMP_EMAIL_PROXY: str = ""
     CPA_URL: str = "http://127.0.0.1:8317"
     CPA_KEY: str = ""
+    CPA_SYNC_ENABLED: str = "true"
+    PLAYWRIGHT_HEADLESS: str = "false"
     PLAYWRIGHT_PROXY_URL: str = ""
     PLAYWRIGHT_PROXY_BYPASS: str = ""
     API_KEY: str = ""
@@ -82,17 +89,19 @@ class SetupConfig(BaseModel):
 @app.get("/api/setup/status")
 def get_setup_status():
     """检查配置是否完整"""
-    from autoteam.setup_wizard import REQUIRED_CONFIGS, _read_env
+    from autoteam.setup_wizard import _read_env, get_setup_fields
 
     env = _read_env()
+    setup_fields = get_setup_fields(env)
     fields = []
     all_ok = True
-    for key, prompt, default, optional in REQUIRED_CONFIGS:
+    for field in setup_fields:
+        key = field["key"]
         val = env.get(key, "") or os.environ.get(key, "")
         ok = bool(val)
-        if not ok and not optional:
+        if not ok and not field["optional"]:
             all_ok = False
-        fields.append({"key": key, "prompt": prompt, "default": default, "optional": optional, "configured": ok})
+        fields.append({**field, "configured": ok, "value": env.get(key, "") or os.environ.get(key, "") or field["default"]})
     return {"configured": all_ok, "fields": fields}
 
 
@@ -101,40 +110,41 @@ def post_setup_save(config: SetupConfig):
     """保存配置到 .env 并验证连通性"""
     import secrets as _secrets
 
-    from autoteam.setup_wizard import REQUIRED_CONFIGS, _write_env
+    from autoteam.config import normalize_email_provider
+    from autoteam.mail_provider import get_provider_label
+    from autoteam.setup_wizard import (
+        _reload_runtime_modules,
+        _verify_cpa,
+        _verify_email_provider,
+        _write_env,
+        get_setup_fields,
+    )
 
     data = config.model_dump()
-    defaults = {key: default for key, _prompt, default, _optional in REQUIRED_CONFIGS}
+    data["EMAIL_PROVIDER"] = normalize_email_provider(data.get("EMAIL_PROVIDER"))
+    defaults = {field["key"]: field["default"] for field in get_setup_fields(data)}
     if not data.get("CPA_URL"):
         data["CPA_URL"] = defaults.get("CPA_URL", "http://127.0.0.1:8317")
     if not data.get("API_KEY"):
         data["API_KEY"] = _secrets.token_urlsafe(24)
 
-    clearable_fields = {"PLAYWRIGHT_PROXY_URL", "PLAYWRIGHT_PROXY_BYPASS"}
+    clearable_fields = {
+        field["key"]
+        for field in get_setup_fields(data)
+        if field["optional"] or field["key"] == "EMAIL_PROVIDER"
+    }
     for key, value in data.items():
         if value or key in clearable_fields:
             _write_env(key, value)
             os.environ[key] = value
 
-    # 重新加载模块
-    import importlib
-
-    import autoteam.config
-
-    importlib.reload(autoteam.config)
-    try:
-        import autoteam.cloudmail
-
-        importlib.reload(autoteam.cloudmail)
-    except Exception:
-        pass
+    _reload_runtime_modules()
 
     # 验证连通性
     errors = []
-    from autoteam.setup_wizard import _verify_cloudmail, _verify_cpa
-
-    if not _verify_cloudmail():
-        errors.append("CloudMail 连接失败")
+    provider_label = get_provider_label(data.get("EMAIL_PROVIDER"))
+    if not _verify_email_provider(data.get("EMAIL_PROVIDER")):
+        errors.append(f"{provider_label} 连接失败")
     if not _verify_cpa():
         errors.append("CPA 连接失败")
 
@@ -443,7 +453,7 @@ def _display_account_status(acc: dict, quota_snapshot: dict | None = None) -> st
 
 def _sanitize_account(acc: dict, quota_snapshot: dict | None = None) -> dict:
     """脱敏账号信息（去掉 password 等敏感字段）"""
-    sanitized = {k: v for k, v in acc.items() if k not in ("password", "cloudmail_account_id")}
+    sanitized = {k: v for k, v in acc.items() if k not in ("password", "cloudmail_account_id", "mailbox")}
     sanitized["is_main_account"] = _is_main_account_email(acc.get("email"))
     sanitized["status"] = _display_account_status(acc, quota_snapshot)
     return sanitized
@@ -1212,7 +1222,7 @@ def post_account_login(params: LoginAccountParams):
             save_auth_file,
         )
 
-        mail_client = CloudMailClient()
+        mail_client = CloudMailClient(account=acc)
         mail_client.login()
         bundle = login_codex_via_browser(email, acc.get("password", ""), mail_client=mail_client)
         if bundle:
@@ -1957,7 +1967,7 @@ class _QuietAccessLog(logging.Filter):
         return not any(p in msg for p in self._quiet_paths)
 
 
-def start_server(host: str = "0.0.0.0", port: int = 8787):
+def start_server(host: str = "0.0.0.0", port: int = 8786):
     """启动 API 服务器"""
     import uvicorn
 

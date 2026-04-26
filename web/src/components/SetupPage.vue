@@ -9,15 +9,32 @@
       </div>
 
       <div class="space-y-4">
-        <div v-for="field in fields" :key="field.key">
+        <div v-for="field in visibleFields" :key="field.key">
           <label class="block text-sm text-gray-400 mb-1">
             {{ field.prompt }}
             <span v-if="!field.optional" class="text-red-400">*</span>
             <span v-if="field.key === 'API_KEY'" class="text-gray-500 text-xs ml-1">（留空自动生成）</span>
           </label>
-          <input
+          <select
+            v-if="field.type === 'select'"
             v-model="form[field.key]"
-            :type="field.key.includes('PASSWORD') || field.key.includes('KEY') ? 'password' : 'text'"
+            class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500"
+          >
+            <option v-for="opt in field.options || []" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+          <textarea
+            v-else-if="field.key === 'CLOUDFLARE_TEMP_EMAIL_DOMAINS'"
+            v-model="form[field.key]"
+            rows="3"
+            :placeholder="field.default || ''"
+            class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500"
+          ></textarea>
+          <input
+            v-else
+            v-model="form[field.key]"
+            :type="field.type === 'password' || field.key.includes('KEY') ? 'password' : 'text'"
             :placeholder="field.default || ''"
             class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500"
           />
@@ -33,7 +50,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, reactive } from 'vue'
+import { computed, ref, onMounted, reactive } from 'vue'
 import { api, setApiKey } from '../api.js'
 
 const emit = defineEmits(['configured'])
@@ -43,13 +60,17 @@ const form = reactive({})
 const saving = ref(false)
 const message = ref('')
 const messageClass = ref('')
+const selectedProvider = computed(() => form.EMAIL_PROVIDER || 'cloudflare_temp_email')
+const visibleFields = computed(() =>
+  fields.value.filter((field) => !field.provider || field.provider === selectedProvider.value)
+)
 
 onMounted(async () => {
   try {
     const result = await api.getSetupStatus()
     fields.value = result.fields
     for (const f of result.fields) {
-      form[f.key] = f.default || ''
+      form[f.key] = f.value ?? f.default ?? ''
     }
   } catch (e) {
     message.value = '获取配置状态失败: ' + e.message
