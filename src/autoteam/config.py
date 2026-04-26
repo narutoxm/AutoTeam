@@ -120,6 +120,10 @@ CLOUDFLARE_TEMP_EMAIL_PROXY = os.environ.get("CLOUDFLARE_TEMP_EMAIL_PROXY", "").
 
 # ChatGPT Team 配置
 CHATGPT_ACCOUNT_ID = os.environ.get("CHATGPT_ACCOUNT_ID", "")
+# 邀请成员角色：
+# - standard-user: 普通成员
+# - account-admin: 管理员（需要主号具备权限；部分工作区可能不支持）
+TEAM_INVITE_ROLE = (os.environ.get("TEAM_INVITE_ROLE", "account-admin") or "").strip() or "account-admin"
 
 # CPA (CLIProxyAPI) 配置
 CPA_URL = os.environ.get("CPA_URL", "")

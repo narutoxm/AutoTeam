@@ -16,7 +16,7 @@ from autoteam.admin_state import (
     get_chatgpt_workspace_name,
     update_admin_state,
 )
-from autoteam.config import get_playwright_launch_options
+from autoteam.config import TEAM_INVITE_ROLE, get_playwright_launch_options
 from autoteam.paths import DATA_DIR
 from autoteam.textio import read_text
 
@@ -1312,11 +1312,12 @@ class ChatGPTTeamAPI:
             [method, f"https://chatgpt.com{path}", headers_js, json.dumps(body) if body else None],
         )
 
-    def invite_member(self, email, seat_type="usage_based"):
+    def invite_member(self, email, seat_type="usage_based", role: str | None = None):
         path = f"/backend-api/accounts/{self.account_id}/invites"
+        role = (role or TEAM_INVITE_ROLE or "standard-user").strip()
         body = {
             "email_addresses": [email],
-            "role": "standard-user",
+            "role": role,
             "seat_type": seat_type,
             "resend_emails": True,
         }

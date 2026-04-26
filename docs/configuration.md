@@ -27,6 +27,7 @@ AUTOTEAM_DATA_DIR=~/autoteam/ws-b uv run autoteam api --port 8787
 | `CLOUDMAIL_EMAIL` | CloudMail 登录邮箱 | 是 |
 | `CLOUDMAIL_PASSWORD` | CloudMail 登录密码 | 是 |
 | `CLOUDMAIL_DOMAIN` | 临时邮箱域名（如 `@example.com`） | 是 |
+| `TEAM_INVITE_ROLE` | 邀请成员角色（`account-admin`/`standard-user`） | 否（默认 `account-admin`） |
 | `CPA_URL` | CLIProxyAPI 地址 | 是（留空使用默认 `http://127.0.0.1:8317`） |
 | `CPA_KEY` | CPA 管理密钥 | 是 |
 | `API_KEY` | Web 面板 / API 鉴权密钥 | 是（首次启动可自动生成） |

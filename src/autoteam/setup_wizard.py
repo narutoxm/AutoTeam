@@ -41,6 +41,7 @@ PROVIDER_CONFIGS = {
 }
 
 COMMON_CONFIGS = [
+    ("TEAM_INVITE_ROLE", "邀请成员角色（standard-user/account-admin）", "account-admin", True),
     ("CPA_URL", "CPA (CLIProxyAPI) 地址", "http://127.0.0.1:8317", False),
     ("CPA_KEY", "CPA 管理密钥", "", False),
     ("CPA_SYNC_ENABLED", "CPA 自动同步（true/false）", "true", True),
@@ -101,6 +102,12 @@ def get_setup_fields(values: dict[str, str] | None = None) -> list[dict[str, obj
                     {"value": "false", "label": "关闭（有界面）"},
                     {"value": "true", "label": "开启（无头）"},
                 ]
+        elif key == "TEAM_INVITE_ROLE":
+            field_type = "select"
+            options = [
+                {"value": "account-admin", "label": "管理员"},
+                {"value": "standard-user", "label": "普通成员"},
+            ]
         fields.append(
             {
                 "key": key,
