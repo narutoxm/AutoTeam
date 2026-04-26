@@ -6,7 +6,6 @@ import logging
 import re
 import time
 import uuid
-from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
@@ -18,13 +17,13 @@ from autoteam.admin_state import (
     update_admin_state,
 )
 from autoteam.config import get_playwright_launch_options
+from autoteam.paths import DATA_DIR
 from autoteam.textio import read_text
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-BASE_DIR = PROJECT_ROOT
-SCREENSHOT_DIR = PROJECT_ROOT / "screenshots"
+BASE_DIR = DATA_DIR
+SCREENSHOT_DIR = DATA_DIR / "screenshots"
 
 _WORKSPACE_IGNORE_LABELS = {
     "choose a workspace",

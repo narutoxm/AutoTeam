@@ -30,6 +30,7 @@ docker compose down
 | `data/.env` | 配置文件 |
 | `data/accounts.json` | 账号池状态 |
 | `data/state.json` | 管理员登录态 |
+| `data/mailboxes.json` | 临时邮箱凭据（用于自动读取验证码/邀请） |
 | `data/auths/` | Codex 认证文件 |
 | `data/screenshots/` | 调试截图 |
 

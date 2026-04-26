@@ -28,18 +28,19 @@ from autoteam.chatgpt_api import ChatGPTTeamAPI
 from autoteam.cloudmail import CloudMailClient
 from autoteam.config import get_playwright_launch_options
 from autoteam.mail_provider import get_message_key
+from autoteam.paths import data_path
 
 logger = logging.getLogger(__name__)
 
 MAIL_TIMEOUT = int(os.environ.get("MAIL_TIMEOUT", "180"))
-SCREENSHOT_DIR = "screenshots"
+SCREENSHOT_DIR = data_path("screenshots")
 
 
 def screenshot(page, name):
-    os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-    path = f"{SCREENSHOT_DIR}/{name}"
-    page.screenshot(path=path, full_page=True)
-    logger.debug("[截图] %s", path)
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = SCREENSHOT_DIR / name
+    page.screenshot(path=str(path), full_page=True)
+    logger.debug("[截图] %s", str(path))
 
 
 def find_and_click(page, selectors, label="元素", timeout=3000):

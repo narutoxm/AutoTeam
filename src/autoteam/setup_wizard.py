@@ -9,13 +9,13 @@ import re
 import secrets
 import sys
 
-from autoteam.config import PROJECT_ROOT, normalize_email_provider
+from autoteam.config import DATA_DIR, PROJECT_ROOT, normalize_email_provider
 from autoteam.mail_provider import EMAIL_PROVIDER_OPTIONS, get_provider_label
 from autoteam.textio import parse_env_line, read_text, write_text
 
 logger = logging.getLogger(__name__)
 
-ENV_FILE = PROJECT_ROOT / ".env"
+ENV_FILE = DATA_DIR / ".env"
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 
 EMAIL_PROVIDER_FIELD = ("EMAIL_PROVIDER", "邮箱服务商", "cloudflare_temp_email", False)

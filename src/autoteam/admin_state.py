@@ -1,6 +1,6 @@
 """管理员登录态持久化。
 
-统一使用项目根目录下的 `state.json` 文件保存：
+统一使用数据目录下的 `state.json` 文件保存：
 - session_token
 - email
 - password
@@ -17,11 +17,11 @@ import os
 import time
 from pathlib import Path
 
+from autoteam.paths import DATA_DIR
 from autoteam.textio import read_text, write_text
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-STATE_FILE = PROJECT_ROOT / "state.json"
-LEGACY_SESSION_FILE = PROJECT_ROOT / "session"
+STATE_FILE = DATA_DIR / "state.json"
+LEGACY_SESSION_FILE = DATA_DIR / "session"
 STATE_FILE_MODE = 0o666
 
 

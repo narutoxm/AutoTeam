@@ -22,12 +22,12 @@ from autoteam.admin_state import (
 from autoteam.auth_storage import AUTH_DIR, ensure_auth_dir, ensure_auth_file_permissions
 from autoteam.config import get_playwright_launch_options, get_requests_proxy_dict
 from autoteam.mail_provider import get_message_key
+from autoteam.paths import DATA_DIR
 from autoteam.textio import write_text
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-SCREENSHOT_DIR = PROJECT_ROOT / "screenshots"
+SCREENSHOT_DIR = DATA_DIR / "screenshots"
 
 # Codex OAuth 配置
 CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"

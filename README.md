@@ -24,7 +24,7 @@
 
 | | 功能 | 描述 |
 |---|---|---|
-| 📧 | **自动注册** | CloudMail 临时邮箱 + Playwright 自动注册 |
+| 📧 | **自动注册** | CloudMail / Cloudflare Temp Email + Playwright 自动注册 |
 | 🔐 | **Codex OAuth** | 自动登录 Codex，无密码时可走邮箱验证码 |
 | 🔑 | **手动 OAuth 导入** | 支持 localhost 自动回调，也支持手动粘贴回调 URL |
 | 🔄 | **智能轮转** | 额度不足自动移出，旧号恢复后优先复用 |
@@ -63,6 +63,13 @@ uv run autoteam rotate
 ```
 
 首次启动会自动引导配置 CloudMail、CPA、API Key，并验证连通性。
+
+如果你需要在同一台机器上同时管理多个主号/多个 workspace，可以为每个实例指定独立数据目录并使用不同端口：
+
+```bash
+AUTOTEAM_DATA_DIR=~/autoteam/ws-a uv run autoteam api --port 8786
+AUTOTEAM_DATA_DIR=~/autoteam/ws-b uv run autoteam api --port 8787
+```
 
 ### Docker 部署
 

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 
+from autoteam.paths import DATA_DIR
 from autoteam.textio import read_text, write_text
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-MAILBOX_STORE_FILE = PROJECT_ROOT / "mailboxes.json"
+MAILBOX_STORE_FILE = DATA_DIR / "mailboxes.json"
 
 
 def _normalized_email(value: str | None) -> str:

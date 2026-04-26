@@ -147,12 +147,21 @@ PLAYWRIGHT_PROXY_URL=http://username:password@host.docker.internal:1080
 4. 输入管理员邮箱，点击「开始登录」
 5. 按提示输入密码或邮箱验证码
 6. 选择 Team workspace（如 `Idapro`）
-7. 登录成功后会自动保存到 `state.json`
+7. 登录成功后会自动保存到数据目录的 `state.json`
 
 ### 通过命令行
 
 ```bash
 uv run autoteam admin-login --email your-admin@example.com
+```
+
+### 多主号提示
+
+如果你需要在同一台机器上管理多个主号/多个 workspace，请为每个实例指定独立的数据目录并使用不同端口启动：
+
+```bash
+AUTOTEAM_DATA_DIR=~/autoteam/ws-a uv run autoteam api --port 8786
+AUTOTEAM_DATA_DIR=~/autoteam/ws-b uv run autoteam api --port 8787
 ```
 
 ## 第四步：首次轮转

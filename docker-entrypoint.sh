@@ -11,7 +11,7 @@ mkdir -p /app/data /app/data/auths /app/data/screenshots
 chmod -R 777 /app/data
 
 # 数据文件：无条件软链到 data/（确保所有写入都持久化）
-for f in .env accounts.json state.json; do
+for f in .env accounts.json state.json mailboxes.json; do
     # data 里没有就创建空文件
     [ -f "/app/data/$f" ] || touch "/app/data/$f"
     # 删除容器内的真实文件（如果不是软链），然后建软链

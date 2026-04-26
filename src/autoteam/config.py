@@ -4,19 +4,49 @@ import os
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
+from autoteam.paths import CODE_ROOT
+from autoteam.paths import DATA_DIR as _DATA_DIR
 from autoteam.textio import parse_env_line, parse_env_value, read_text
 
-# 项目根目录（pyproject.toml 所在位置）
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+# 代码根目录（pyproject.toml 所在位置）
+PROJECT_ROOT = CODE_ROOT
+# 运行时数据目录（accounts.json/state.json/auths/...）
+DATA_DIR = _DATA_DIR
 
-# 加载 .env 文件（从项目根目录）
-_env_file = PROJECT_ROOT / ".env"
-if _env_file.exists():
-    for line in read_text(_env_file).splitlines():
+_preexisting_env_keys = set(os.environ.keys())
+
+
+def _load_env_file(path: Path, *, override_defaults: bool) -> bool:
+    if not path.exists():
+        return False
+    try:
+        lines = read_text(path).splitlines()
+    except Exception:
+        return False
+    for line in lines:
         parsed = parse_env_line(line)
         if parsed:
             key, value = parsed
-            os.environ.setdefault(key, value)
+            # Never override variables provided by the real environment (shell/Docker/etc).
+            if key in _preexisting_env_keys:
+                continue
+            if override_defaults:
+                os.environ[key] = value
+            else:
+                os.environ.setdefault(key, value)
+    return True
+
+
+# 加载 .env 文件：
+# - 先加载项目根目录 .env 作为默认值来源
+# - 再加载 DATA_DIR/.env 覆盖默认值（仍不覆盖真实环境变量）
+_root_env = PROJECT_ROOT / ".env"
+_data_env = DATA_DIR / ".env"
+if DATA_DIR == PROJECT_ROOT:
+    _load_env_file(_root_env, override_defaults=False)
+else:
+    _load_env_file(_root_env, override_defaults=False)
+    _load_env_file(_data_env, override_defaults=True)
 
 
 def _get_int_env(name: str, default: int) -> int:

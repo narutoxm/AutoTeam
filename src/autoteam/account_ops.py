@@ -6,14 +6,12 @@ from pathlib import Path
 
 from autoteam.accounts import find_account, load_accounts, save_accounts
 from autoteam.admin_state import get_chatgpt_account_id
+from autoteam.auth_storage import AUTH_DIR
 from autoteam.cloudmail import CloudMailClient
 from autoteam.cpa_sync import delete_from_cpa, list_cpa_files, sync_to_cpa
 from autoteam.mail_provider import get_account_email_provider, get_account_mailbox
 
 logger = logging.getLogger(__name__)
-
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-AUTH_DIR = PROJECT_ROOT / "auths"
 
 
 def _response_excerpt(body, limit=240):

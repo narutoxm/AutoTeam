@@ -56,6 +56,12 @@ AUTO_CHECK_INTERVAL=300  # 5 分钟
 cat state.json | python -m json.tool
 ```
 
+如果你设置了 `AUTOTEAM_DATA_DIR`，请到对应数据目录下查看：
+
+```bash
+cat "$AUTOTEAM_DATA_DIR/state.json" | python -m json.tool
+```
+
 确认：
 - `account_id` 是有效 UUID
 - `workspace_name` 是 Team 名称

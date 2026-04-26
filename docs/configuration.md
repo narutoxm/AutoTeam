@@ -8,6 +8,19 @@
 cp .env.example .env
 ```
 
+## 数据目录（多主号/多实例）
+
+默认情况下，AutoTeam 会把运行时数据写在项目目录下（例如 `state.json`、`accounts.json`、`auths/` 等）。
+
+如果你需要在同一台机器上管理多个主号/多个 workspace，建议为每个实例指定独立的数据目录，避免状态互相覆盖：
+
+```bash
+AUTOTEAM_DATA_DIR=~/autoteam/ws-a uv run autoteam api --port 8786
+AUTOTEAM_DATA_DIR=~/autoteam/ws-b uv run autoteam api --port 8787
+```
+
+每个数据目录都会独立保存 `.env`、`accounts.json`、`state.json`、`mailboxes.json`、`auths/`、`screenshots/` 等文件。
+
 | 配置项 | 说明 | 必填 |
 |--------|------|------|
 | `CLOUDMAIL_BASE_URL` | CloudMail API 地址 | 是 |
@@ -116,6 +129,7 @@ codex-{email}-{plan_type}-{hash}.json
 | `.env` | 运行配置 |
 | `accounts.json` | 本地账号池状态 |
 | `state.json` | 管理员登录态 |
+| `mailboxes.json` | 临时邮箱凭据（用于自动读取验证码/邀请） |
 | `auths/` | 轮转账号与主号的 Codex 认证文件 |
 | `screenshots/` | 浏览器自动化调试截图 |
 
