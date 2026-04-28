@@ -16,7 +16,14 @@ from autoteam.admin_state import (
     get_chatgpt_workspace_name,
     update_admin_state,
 )
-from autoteam.config import TEAM_INVITE_ROLE, get_playwright_launch_options
+from autoteam.config import (
+    CHATGPT_SESSION_IMPORT_BACKEND,
+    PLAYWRIGHT_HEADLESS,
+    SELENIUMBASE_UC_RECONNECT_TIME,
+    TEAM_INVITE_ROLE,
+    get_playwright_launch_options,
+    get_seleniumbase_proxy,
+)
 from autoteam.paths import DATA_DIR
 from autoteam.textio import read_text
 
@@ -127,6 +134,7 @@ class ChatGPTTeamAPI:
         self.browser = None
         self.context = None
         self.page = None
+        self.uc_driver = None
         self.access_token = None
         self.session_token = None
         self.account_id = get_chatgpt_account_id()
@@ -1098,6 +1106,11 @@ class ChatGPTTeamAPI:
 
     def import_admin_session(self, email, session_token):
         """手动导入管理员 session_token，并自动识别 workspace 信息。"""
+        if CHATGPT_SESSION_IMPORT_BACKEND == "playwright":
+            return self._import_admin_session_playwright(email, session_token)
+        return self._import_admin_session_uc(email, session_token)
+
+    def _normalize_import_inputs(self, email, session_token):
         email = (email or "").strip()
         session_token = (session_token or "").strip()
         if not email:
@@ -1107,7 +1120,156 @@ class ChatGPTTeamAPI:
 
         self.login_email = email
         self.session_token = session_token
+        return email, session_token
 
+    def _selenium_session_cookies(self, session_token):
+        cookies = self._build_session_cookies(session_token, ".chatgpt.com")
+        if self.account_id:
+            cookies.append(
+                {
+                    "name": "_account",
+                    "value": self.account_id,
+                    "domain": ".chatgpt.com",
+                    "path": "/",
+                    "secure": True,
+                }
+            )
+        cookies.append(
+            {
+                "name": "oai-did",
+                "value": self.oai_device_id,
+                "domain": ".chatgpt.com",
+                "path": "/",
+                "secure": True,
+            }
+        )
+
+        allowed = {"name", "value", "domain", "path", "secure", "httpOnly", "expiry"}
+        return [{k: v for k, v in cookie.items() if k in allowed and v not in (None, "")} for cookie in cookies]
+
+    def _uc_open(self, driver, url):
+        if hasattr(driver, "uc_open_with_reconnect"):
+            driver.uc_open_with_reconnect(url, reconnect_time=SELENIUMBASE_UC_RECONNECT_TIME)
+        else:
+            driver.get(url)
+        time.sleep(3)
+        if hasattr(driver, "uc_gui_click_captcha"):
+            try:
+                driver.uc_gui_click_captcha()
+                time.sleep(3)
+            except Exception:
+                pass
+
+    def _uc_fetch_json(self, driver, path, headers=None):
+        return driver.execute_async_script(
+            """
+            const path = arguments[0];
+            const headers = arguments[1] || {};
+            const done = arguments[arguments.length - 1];
+            fetch(path, {headers, credentials: 'include'})
+                .then(async (resp) => {
+                    let data = null;
+                    try { data = await resp.json(); } catch (e) { data = null; }
+                    done({ok: true, status: resp.status, data});
+                })
+                .catch((e) => done({ok: false, error: String(e)}));
+            """,
+            path,
+            headers or {},
+        )
+
+    def _uc_body_excerpt(self, driver, limit=300):
+        try:
+            body = driver.find_element("tag name", "body").text
+            return (body or "")[:limit].replace("\n", " ")
+        except Exception:
+            return ""
+
+    def _import_admin_session_uc(self, email, session_token):
+        email, session_token = self._normalize_import_inputs(email, session_token)
+        try:
+            from seleniumbase import Driver
+        except Exception as exc:
+            raise RuntimeError(
+                "当前配置使用 SeleniumBase UC 导入 session_token，但 seleniumbase 未安装；"
+                "请运行 `uv sync` 或安装 seleniumbase，或设置 CHATGPT_SESSION_IMPORT_BACKEND=playwright"
+            ) from exc
+
+        proxy = get_seleniumbase_proxy()
+        driver_kwargs = {"uc": True, "headless2": PLAYWRIGHT_HEADLESS}
+        if proxy:
+            driver_kwargs["proxy"] = proxy
+
+        logger.info("[ChatGPT] 使用 SeleniumBase UC 导入管理员 session_token: %s", email)
+        driver = Driver(**driver_kwargs)
+        self.uc_driver = driver
+        try:
+            self._uc_open(driver, "https://chatgpt.com/favicon.ico")
+            for cookie in self._selenium_session_cookies(session_token):
+                try:
+                    driver.add_cookie(cookie)
+                except Exception as exc:
+                    logger.debug("[ChatGPT] UC 注入 cookie 失败（已忽略）: %s", exc)
+
+            self._uc_open(driver, "https://chatgpt.com/")
+            logger.info("[ChatGPT] UC 导入 session 后 | URL=%s | body=%s", driver.current_url, self._uc_body_excerpt(driver))
+
+            result = self._uc_fetch_json(driver, "/api/auth/session")
+            data = result.get("data") if isinstance(result, dict) else None
+            access_token = data.get("accessToken") if isinstance(data, dict) else ""
+            if not access_token:
+                raise RuntimeError(
+                    "session_token 无效或已过期，未能从 UC 当前登录态获取 access token；"
+                    f"当前 URL={driver.current_url} 页面片段={self._uc_body_excerpt(driver)}"
+                )
+
+            self.access_token = access_token
+            self.session_token = session_token
+            logger.info("[ChatGPT] UC 已获取 access token")
+
+            account_id = self._extract_account_id_from_access_token()
+            workspace_name = ""
+            if account_id:
+                settings = self._uc_fetch_json(
+                    driver,
+                    f"/backend-api/accounts/{account_id}/settings",
+                    {"authorization": f"Bearer {self.access_token}", "chatgpt-account-id": account_id},
+                )
+                settings_data = settings.get("data") if isinstance(settings, dict) else None
+                if isinstance(settings_data, dict):
+                    workspace_name = settings_data.get("workspace_name") or ""
+
+            if not account_id:
+                raise RuntimeError("无法从 session_token 自动识别 workspace/account ID，请确认该 session 已登录 Team 主号")
+
+            self.account_id = account_id
+            self.workspace_name = workspace_name or ""
+            update_admin_state(
+                email=email,
+                session_token=session_token,
+                account_id=self.account_id,
+                workspace_name=self.workspace_name,
+            )
+            logger.info("[ChatGPT] 管理员 session_token 已保存")
+
+            return {
+                "email": email,
+                "password": "",
+                "session_token": session_token,
+                "account_id": self.account_id,
+                "workspace_name": self.workspace_name,
+                "session_len": len(session_token),
+            }
+        except Exception:
+            try:
+                SCREENSHOT_DIR.mkdir(exist_ok=True)
+                driver.save_screenshot(str(SCREENSHOT_DIR / "admin_session_uc_failed.png"))
+            except Exception:
+                pass
+            raise
+
+    def _import_admin_session_playwright(self, email, session_token):
+        email, session_token = self._normalize_import_inputs(email, session_token)
         self._launch_browser()
         logger.info("[ChatGPT] 开始导入管理员 session_token: %s", email)
         self.page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60000)
@@ -1367,6 +1529,11 @@ class ChatGPTTeamAPI:
 
     def stop(self):
         try:
+            if self.uc_driver:
+                self.uc_driver.quit()
+        except Exception:
+            pass
+        try:
             if self.browser:
                 self.browser.close()
         except Exception:
@@ -1380,3 +1547,4 @@ class ChatGPTTeamAPI:
         self.context = None
         self.page = None
         self.playwright = None
+        self.uc_driver = None

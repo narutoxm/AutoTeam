@@ -69,3 +69,44 @@ def test_select_workspace_option_shortcuts_completed_when_chatgpt_home_loaded(mo
     )
 
     assert client.select_workspace_option(0) == {"step": "completed", "detail": None}
+
+
+def test_import_admin_session_uses_configured_backend(monkeypatch):
+    client = chatgpt_api.ChatGPTTeamAPI()
+    calls = []
+
+    monkeypatch.setattr(client, "_import_admin_session_uc", lambda email, token: calls.append(("uc", email, token)))
+    monkeypatch.setattr(
+        client,
+        "_import_admin_session_playwright",
+        lambda email, token: calls.append(("playwright", email, token)),
+    )
+
+    monkeypatch.setattr(chatgpt_api, "CHATGPT_SESSION_IMPORT_BACKEND", "uc")
+    client.import_admin_session("admin@example.com", "session-token")
+
+    monkeypatch.setattr(chatgpt_api, "CHATGPT_SESSION_IMPORT_BACKEND", "playwright")
+    client.import_admin_session("admin@example.com", "session-token")
+
+    assert calls == [
+        ("uc", "admin@example.com", "session-token"),
+        ("playwright", "admin@example.com", "session-token"),
+    ]
+
+
+def test_stop_closes_uc_driver():
+    class FakeUcDriver:
+        def __init__(self):
+            self.closed = False
+
+        def quit(self):
+            self.closed = True
+
+    client = chatgpt_api.ChatGPTTeamAPI()
+    driver = FakeUcDriver()
+    client.uc_driver = driver
+
+    client.stop()
+
+    assert driver.closed is True
+    assert client.uc_driver is None

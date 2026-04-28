@@ -107,3 +107,13 @@ def test_get_setup_fields_includes_cpa_sync_option():
     assert cpa_sync["type"] == "select"
     assert cpa_sync["default"] == "true"
     assert cpa_sync["optional"] is True
+
+
+def test_get_setup_fields_includes_session_import_backend_option():
+    fields = setup_wizard.get_setup_fields({"EMAIL_PROVIDER": "cloudflare_temp_email"})
+    backend = next(field for field in fields if field["key"] == "CHATGPT_SESSION_IMPORT_BACKEND")
+
+    assert backend["type"] == "select"
+    assert backend["default"] == "uc"
+    assert backend["optional"] is True
+    assert {option["value"] for option in backend["options"]} == {"uc", "playwright"}

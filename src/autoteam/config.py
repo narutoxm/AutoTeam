@@ -152,6 +152,10 @@ PLAYWRIGHT_PROXY_USERNAME = os.environ.get("PLAYWRIGHT_PROXY_USERNAME", "").stri
 PLAYWRIGHT_PROXY_PASSWORD = os.environ.get("PLAYWRIGHT_PROXY_PASSWORD", "").strip()
 PLAYWRIGHT_PROXY_BYPASS = os.environ.get("PLAYWRIGHT_PROXY_BYPASS", "").strip()
 
+# 管理员 session_token 导入后端：uc（SeleniumBase UC）或 playwright
+CHATGPT_SESSION_IMPORT_BACKEND = os.environ.get("CHATGPT_SESSION_IMPORT_BACKEND", "uc").strip().lower() or "uc"
+SELENIUMBASE_UC_RECONNECT_TIME = _get_int_env("SELENIUMBASE_UC_RECONNECT_TIME", 6)
+
 
 def _format_proxy_host(hostname: str) -> str:
     if ":" in hostname and not hostname.startswith("["):
@@ -236,3 +240,12 @@ def get_requests_proxy_dict():
     if not proxy_url:
         return None
     return {"http": proxy_url, "https": proxy_url}
+
+
+def get_seleniumbase_proxy():
+    """Return proxy string for SeleniumBase Driver(proxy=...)."""
+    if PLAYWRIGHT_PROXY_URL:
+        return PLAYWRIGHT_PROXY_URL
+    if PLAYWRIGHT_PROXY_SERVER:
+        return PLAYWRIGHT_PROXY_SERVER
+    return ""

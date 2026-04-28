@@ -83,6 +83,8 @@ class SetupConfig(BaseModel):
     PLAYWRIGHT_HEADLESS: str = "false"
     PLAYWRIGHT_PROXY_URL: str = ""
     PLAYWRIGHT_PROXY_BYPASS: str = ""
+    CHATGPT_SESSION_IMPORT_BACKEND: str = "uc"
+    SELENIUMBASE_UC_RECONNECT_TIME: str = "6"
     API_KEY: str = ""
 
 
