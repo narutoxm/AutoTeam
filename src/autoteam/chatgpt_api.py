@@ -1320,17 +1320,55 @@ class ChatGPTTeamAPI:
                 pass
         return False
 
+    def _uc_click_chatgpt_login_button(self):
+        driver = self.uc_driver
+        if not driver:
+            return False
+
+        selectors = [
+            'button[data-testid="login-button"]',
+            'button:has(span)',
+            "button",
+            'a[href*="/auth/login"]',
+        ]
+        for selector in selectors:
+            try:
+                elements = driver.find_elements("css selector", selector)
+            except Exception:
+                elements = []
+            for element in elements:
+                try:
+                    text = " ".join((element.text or "").split())
+                    if not element.is_displayed():
+                        continue
+                    if "登录" not in text and "Log in" not in text:
+                        continue
+                    element.click()
+                    return True
+                except Exception:
+                    pass
+
+        return self._uc_click_auth_button(labels=["登录", "Log in"])
+
     def _uc_open_login_page(self):
         driver = self._ensure_uc_driver()
         self._uc_open(driver, "https://chatgpt.com/")
         self._uc_log_login_state("进入 chatgpt.com 后")
-        self._uc_click_auth_button(labels=["登录", "Log in"])
+        self._uc_click_chatgpt_login_button()
         time.sleep(3)
         if "auth" not in (driver.current_url or "").lower():
             self._uc_open(driver, "https://chatgpt.com/auth/login")
         time.sleep(2)
-        self._uc_click_auth_button(labels=["登录", "Log in"])
-        time.sleep(3)
+        for attempt in range(1, 5):
+            if self._uc_visible_element(self.UC_EMAIL_INPUT_SELECTORS, timeout=1):
+                break
+            url_l = (driver.current_url or "").lower()
+            if "log-in-or-create-account" in url_l:
+                break
+            if "chatgpt.com/auth/login" in url_l:
+                clicked = self._uc_click_chatgpt_login_button()
+                logger.info("[ChatGPT] UC 点击 ChatGPT 登录按钮（第 %d 次）| clicked=%s", attempt, clicked)
+            time.sleep(4)
         self._uc_log_login_state("打开登录页后")
 
     def _uc_extract_session_token(self):
@@ -1397,9 +1435,12 @@ class ChatGPTTeamAPI:
         if self._uc_visible_element(self.UC_EMAIL_INPUT_SELECTORS, timeout=1):
             logger.info("[ChatGPT] 登录步骤检测: email_required | URL=%s", url)
             return "email_required", None
-        if "log-in-or-create-account" in url_l or url_l.endswith("/auth/login"):
+        if "log-in-or-create-account" in url_l:
             logger.info("[ChatGPT] 登录步骤检测: email_required(url) | URL=%s", url)
             return "email_required", None
+        if url_l.endswith("/auth/login"):
+            logger.info("[ChatGPT] 登录步骤检测: chatgpt_login_button_required | URL=%s", url)
+            return "unknown", url
         if self._uc_extract_session_token():
             logger.info("[ChatGPT] 登录步骤检测: completed(session) | URL=%s", url)
             return "completed", None
@@ -1415,6 +1456,8 @@ class ChatGPTTeamAPI:
             step, detail = self._uc_detect_login_step()
             if step in allowed_steps:
                 return step, detail
+            if self.uc_driver and "chatgpt.com/auth/login" in (self.uc_driver.current_url or "").lower():
+                self._uc_click_chatgpt_login_button()
             time.sleep(0.5)
         return self._uc_detect_login_step()
 
