@@ -1262,6 +1262,50 @@ class ChatGPTTeamAPI:
             time.sleep(0.25)
         return None
 
+    def _uc_fill_first_visible(self, selectors, value):
+        driver = self.uc_driver
+        if not driver:
+            return False
+        return bool(
+            driver.execute_script(
+                """
+                const selectors = arguments[0] || [];
+                const value = arguments[1] || '';
+                const visible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                for (const selector of selectors) {
+                    for (const el of Array.from(document.querySelectorAll(selector))) {
+                        if (!visible(el)) continue;
+                        el.focus();
+                        el.value = '';
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.value = value;
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                        return true;
+                    }
+                }
+                return false;
+                """,
+                selectors,
+                value,
+            )
+        )
+
+    def _uc_click_retry_if_timed_out(self):
+        body = self._uc_body_excerpt(self.uc_driver, limit=500).lower()
+        if "operation timed out" not in body and "糟糕" not in body and "重试" not in body:
+            return False
+        clicked = self._uc_click_auth_button(labels=["重试", "Retry"])
+        if clicked:
+            logger.info("[ChatGPT] UC 检测到登录页超时，已点击重试")
+            time.sleep(5)
+        return clicked
+
     def _uc_click_auth_button(self, field=None, labels=None):
         driver = self.uc_driver
         if not driver:
@@ -1477,8 +1521,7 @@ class ChatGPTTeamAPI:
             logger.info("[ChatGPT] %s登录初始步骤: %s | detail=%s", actor_label, step, detail)
             return {"step": step, "detail": detail}
 
-        email_input = self._uc_visible_element(self.UC_EMAIL_INPUT_SELECTORS, timeout=15)
-        if not email_input:
+        if not self._uc_visible_element(self.UC_EMAIL_INPUT_SELECTORS, timeout=15):
             try:
                 SCREENSHOT_DIR.mkdir(exist_ok=True)
                 self.uc_driver.save_screenshot(str(SCREENSHOT_DIR / "admin_login_missing_email_uc.png"))
@@ -1491,19 +1534,37 @@ class ChatGPTTeamAPI:
 
         final_step, final_detail = "unknown", self.uc_driver.current_url
         for attempt in range(1, 4):
-            email_input = self._uc_visible_element(self.UC_EMAIL_INPUT_SELECTORS, timeout=3) or email_input
-            try:
-                email_input.clear()
-                email_input.send_keys(email)
-            except Exception:
-                self.uc_driver.execute_script("arguments[0].value = arguments[1];", email_input, email)
+            self._uc_click_retry_if_timed_out()
+            email_input = self._uc_visible_element(self.UC_EMAIL_INPUT_SELECTORS, timeout=6)
+            if not email_input:
+                final_step, final_detail = self._uc_wait_for_login_step(
+                    {"email_required", "password_required", "code_required", "workspace_required", "completed", "error"},
+                    timeout=6,
+                )
+                if final_step != "email_required":
+                    break
+                raise RuntimeError(
+                    f"{actor_label}邮箱输入框已消失，当前 URL: {self.uc_driver.current_url}，"
+                    f"页面片段: {self._uc_body_excerpt(self.uc_driver)}"
+                )
+            filled = self._uc_fill_first_visible(self.UC_EMAIL_INPUT_SELECTORS, email)
+            if not filled:
+                try:
+                    email_input.clear()
+                    email_input.send_keys(email)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"{actor_label}邮箱输入失败，当前 URL: {self.uc_driver.current_url}，"
+                        f"页面片段: {self._uc_body_excerpt(self.uc_driver)}"
+                    ) from exc
             time.sleep(0.5)
-            clicked = self._uc_click_auth_button(email_input, ["Continue", "继续", "Log in", "登录"])
+            clicked = self._uc_click_auth_button(labels=["Continue", "继续", "Log in", "登录"])
             logger.info("[ChatGPT] %s邮箱已提交（第 %d 次）| clicked=%s", actor_label, attempt, clicked)
             final_step, final_detail = self._uc_wait_for_login_step(
                 {"email_required", "password_required", "code_required", "workspace_required", "completed", "error"},
                 timeout=12,
             )
+            self._uc_click_retry_if_timed_out()
             self._uc_log_login_state(f"{actor_label}邮箱提交后（第 {attempt} 次）")
             if final_step == "workspace_required":
                 self._uc_list_workspace_options()

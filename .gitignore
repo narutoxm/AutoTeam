@@ -16,3 +16,4 @@ test.py
 web/node_modules/
 .codex
 .coverage
+downloaded_files/
