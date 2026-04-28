@@ -154,6 +154,8 @@ PLAYWRIGHT_PROXY_BYPASS = os.environ.get("PLAYWRIGHT_PROXY_BYPASS", "").strip()
 
 # 管理员 session_token 导入后端：uc（SeleniumBase UC）或 playwright
 CHATGPT_SESSION_IMPORT_BACKEND = os.environ.get("CHATGPT_SESSION_IMPORT_BACKEND", "uc").strip().lower() or "uc"
+# 管理员邮箱登录后端：uc（SeleniumBase UC）或 playwright
+CHATGPT_ADMIN_LOGIN_BACKEND = os.environ.get("CHATGPT_ADMIN_LOGIN_BACKEND", "uc").strip().lower() or "uc"
 SELENIUMBASE_UC_RECONNECT_TIME = _get_int_env("SELENIUMBASE_UC_RECONNECT_TIME", 6)
 
 

@@ -17,6 +17,7 @@ from autoteam.admin_state import (
     update_admin_state,
 )
 from autoteam.config import (
+    CHATGPT_ADMIN_LOGIN_BACKEND,
     CHATGPT_SESSION_IMPORT_BACKEND,
     PLAYWRIGHT_HEADLESS,
     SELENIUMBASE_UC_RECONNECT_TIME,
@@ -97,6 +98,29 @@ class ChatGPTTeamAPI:
         'input[name="code"]',
         'input[placeholder*="验证码"]',
         'input[placeholder*="code" i]',
+        'input[inputmode="numeric"]',
+        'input[autocomplete="one-time-code"]',
+    ]
+    UC_EMAIL_INPUT_SELECTORS = [
+        'input[name="email"]',
+        'input[id="email-input"]',
+        'input[id="email"]',
+        'input[type="email"]',
+        'input[placeholder*="email"]',
+        'input[placeholder*="Email"]',
+        'input[placeholder*="邮箱"]',
+        'input[autocomplete="email"]',
+        'input[autocomplete="username"]',
+    ]
+    UC_PASSWORD_INPUT_SELECTORS = [
+        'input[name="password"]',
+        'input[type="password"]',
+    ]
+    UC_CODE_INPUT_SELECTORS = [
+        'input[name="code"]',
+        'input[placeholder*="验证码"]',
+        'input[placeholder*="code"]',
+        'input[placeholder*="Code"]',
         'input[inputmode="numeric"]',
         'input[autocomplete="one-time-code"]',
     ]
@@ -747,6 +771,9 @@ class ChatGPTTeamAPI:
         return False
 
     def select_workspace_option(self, option_id):
+        if self.uc_driver and not self.page:
+            return self._select_workspace_option_uc(option_id)
+
         options = self._list_workspace_options()
         for option in options:
             if option["id"] != str(option_id):
@@ -824,6 +851,9 @@ class ChatGPTTeamAPI:
         return "unknown", self.page.url
 
     def begin_login(self, email, actor_label="账号"):
+        if CHATGPT_ADMIN_LOGIN_BACKEND == "uc":
+            return self._begin_login_uc(email, actor_label=actor_label)
+
         self.login_email = email
         if not self.browser:
             self._launch_browser()
@@ -902,6 +932,9 @@ class ChatGPTTeamAPI:
         return self.begin_login(email, actor_label="管理员")
 
     def submit_login_password(self, password, actor_label="账号"):
+        if self.uc_driver and not self.page:
+            return self._submit_login_password_uc(password, actor_label=actor_label)
+
         self.login_password = password
         password_input = self._visible_locator_in_frames(self.PASSWORD_INPUT_SELECTORS, timeout_ms=5000)
         if not password_input:
@@ -924,6 +957,9 @@ class ChatGPTTeamAPI:
         return self.submit_login_password(password, actor_label="管理员")
 
     def submit_login_code(self, code, actor_label="账号"):
+        if self.uc_driver and not self.page:
+            return self._submit_login_code_uc(code, actor_label=actor_label)
+
         code_input = self._visible_locator_in_frames(self.CODE_INPUT_SELECTORS, timeout_ms=5000)
         if not code_input:
             time.sleep(3)
@@ -1068,6 +1104,9 @@ class ChatGPTTeamAPI:
         return account_id, workspace_name
 
     def complete_login(self, persist_admin_state=False):
+        if self.uc_driver and not self.page:
+            return self._complete_login_uc(persist_admin_state=persist_admin_state)
+
         session_token = self._extract_session_token()
         if not session_token:
             raise RuntimeError("登录成功后未提取到 session token")
@@ -1184,6 +1223,491 @@ class ChatGPTTeamAPI:
             return (body or "")[:limit].replace("\n", " ")
         except Exception:
             return ""
+
+    def _ensure_uc_driver(self):
+        if self.uc_driver:
+            return self.uc_driver
+        try:
+            from seleniumbase import Driver
+        except Exception as exc:
+            raise RuntimeError(
+                "当前配置使用 SeleniumBase UC 登录，但 seleniumbase 未安装；"
+                "请运行 `uv sync` 或设置 CHATGPT_ADMIN_LOGIN_BACKEND=playwright"
+            ) from exc
+
+        proxy = get_seleniumbase_proxy()
+        driver_kwargs = {"uc": True, "headless2": PLAYWRIGHT_HEADLESS}
+        if proxy:
+            driver_kwargs["proxy"] = proxy
+        self.uc_driver = Driver(**driver_kwargs)
+        return self.uc_driver
+
+    def _uc_log_login_state(self, label):
+        driver = self.uc_driver
+        if not driver:
+            return
+        logger.info("[ChatGPT] %s | URL=%s | body=%s", label, driver.current_url, self._uc_body_excerpt(driver))
+
+    def _uc_visible_element(self, selectors, timeout=5):
+        driver = self.uc_driver
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for selector in selectors:
+                try:
+                    for element in driver.find_elements("css selector", selector):
+                        if element.is_displayed():
+                            return element
+                except Exception:
+                    pass
+            time.sleep(0.25)
+        return None
+
+    def _uc_click_auth_button(self, field=None, labels=None):
+        driver = self.uc_driver
+        if not driver:
+            return False
+        labels = labels or ["Continue", "继续", "Log in", "登录", "Verify"]
+        try:
+            clicked = driver.execute_script(
+                """
+                const field = arguments[0] || null;
+                const labels = (arguments[1] || []).map(x => String(x).toLowerCase());
+                const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+                const visible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                const matches = (el) => {
+                    const text = norm(el.textContent || el.value || '').toLowerCase();
+                    return labels.some(label => text === label || text.includes(label));
+                };
+                const click = (el) => {
+                    if (!visible(el)) return false;
+                    el.click();
+                    return true;
+                };
+                if (field) {
+                    const form = field.closest('form');
+                    if (form) {
+                        const labeled = Array.from(form.querySelectorAll('button, input[type="submit"]')).find(matches);
+                        if (click(labeled)) return true;
+                        const submit = form.querySelector('button[type="submit"], input[type="submit"]');
+                        if (click(submit)) return true;
+                    }
+                }
+                const all = Array.from(document.querySelectorAll('button, input[type="submit"], [role="button"]'));
+                const labeled = all.find(matches);
+                if (click(labeled)) return true;
+                const submit = all.find(el => (el.getAttribute('type') || '').toLowerCase() === 'submit');
+                if (click(submit)) return true;
+                return false;
+                """,
+                field,
+                labels,
+            )
+            if clicked:
+                return True
+        except Exception:
+            pass
+
+        if field:
+            try:
+                field.send_keys("\n")
+                return True
+            except Exception:
+                pass
+        return False
+
+    def _uc_open_login_page(self):
+        driver = self._ensure_uc_driver()
+        self._uc_open(driver, "https://chatgpt.com/")
+        self._uc_log_login_state("进入 chatgpt.com 后")
+        self._uc_click_auth_button(labels=["登录", "Log in"])
+        time.sleep(3)
+        if "auth" not in (driver.current_url or "").lower():
+            self._uc_open(driver, "https://chatgpt.com/auth/login")
+        time.sleep(2)
+        self._uc_click_auth_button(labels=["登录", "Log in"])
+        time.sleep(3)
+        self._uc_log_login_state("打开登录页后")
+
+    def _uc_extract_session_token(self):
+        driver = self.uc_driver
+        if not driver:
+            return ""
+        session_parts = {}
+        session_token = None
+        try:
+            cookies = driver.get_cookies()
+        except Exception:
+            cookies = []
+        for cookie in cookies:
+            name = cookie.get("name", "")
+            if name == "__Secure-next-auth.session-token":
+                session_token = cookie.get("value", "")
+            elif name.startswith("__Secure-next-auth.session-token."):
+                suffix = name.rsplit(".", 1)[-1]
+                session_parts[suffix] = cookie.get("value", "")
+        if not session_token and session_parts:
+            session_token = "".join(session_parts[k] for k in sorted(session_parts))
+        self.session_token = session_token or ""
+        return self.session_token
+
+    def _uc_is_workspace_selection_page(self):
+        driver = self.uc_driver
+        if not driver:
+            return False
+        url = (driver.current_url or "").lower()
+        if "workspace" in url or "organization" in url:
+            return True
+        body = self._uc_body_excerpt(driver, limit=2000).lower()
+        hint_hits = sum(1 for hint in self._WORKSPACE_PAGE_HINTS if hint in body)
+        return hint_hits >= 2 or ("launch a workspace" in body)
+
+    def _uc_is_chatgpt_ready_url(self):
+        driver = self.uc_driver
+        if not driver:
+            return False
+        url = (driver.current_url or "").lower()
+        return "chatgpt.com" in url and "auth" not in url
+
+    def _uc_detect_login_step(self):
+        driver = self.uc_driver
+        if not driver:
+            return "unknown", ""
+        url = driver.current_url or ""
+        url_l = url.lower()
+        if "accounts.google.com" in url_l:
+            logger.warning("[ChatGPT] 登录步骤检测: 误跳转 Google | URL=%s", url)
+            return "error", "误跳转到了 Google 登录"
+        if self._uc_is_workspace_selection_page():
+            logger.info("[ChatGPT] 登录步骤检测: workspace 页面 | URL=%s", url)
+            return "workspace_required", None
+        if "email-verification" in url_l:
+            logger.info("[ChatGPT] 登录步骤检测: code_required | URL=%s", url)
+            return "code_required", None
+        if self._uc_visible_element(self.UC_CODE_INPUT_SELECTORS, timeout=1):
+            logger.info("[ChatGPT] 登录步骤检测: code_required | URL=%s", url)
+            return "code_required", None
+        if self._uc_visible_element(self.UC_PASSWORD_INPUT_SELECTORS, timeout=1):
+            logger.info("[ChatGPT] 登录步骤检测: password_required | URL=%s", url)
+            return "password_required", None
+        if self._uc_visible_element(self.UC_EMAIL_INPUT_SELECTORS, timeout=1):
+            logger.info("[ChatGPT] 登录步骤检测: email_required | URL=%s", url)
+            return "email_required", None
+        if "log-in-or-create-account" in url_l or url_l.endswith("/auth/login"):
+            logger.info("[ChatGPT] 登录步骤检测: email_required(url) | URL=%s", url)
+            return "email_required", None
+        if self._uc_extract_session_token():
+            logger.info("[ChatGPT] 登录步骤检测: completed(session) | URL=%s", url)
+            return "completed", None
+        if "chatgpt.com" in url_l and "auth" not in url_l:
+            logger.info("[ChatGPT] 登录步骤检测: completed(chatgpt) | URL=%s", url)
+            return "completed", None
+        logger.info("[ChatGPT] 登录步骤检测: unknown | URL=%s", url)
+        return "unknown", url
+
+    def _uc_wait_for_login_step(self, allowed_steps, timeout=15):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            step, detail = self._uc_detect_login_step()
+            if step in allowed_steps:
+                return step, detail
+            time.sleep(0.5)
+        return self._uc_detect_login_step()
+
+    def _begin_login_uc(self, email, actor_label="账号"):
+        self.login_email = email
+        self._ensure_uc_driver()
+
+        logger.info("[ChatGPT] 使用 SeleniumBase UC 开始%s登录: %s", actor_label, email)
+        self._uc_open_login_page()
+        step, detail = self._uc_wait_for_login_step(
+            {"email_required", "password_required", "code_required", "workspace_required", "completed", "error"},
+            timeout=12,
+        )
+        if step == "workspace_required":
+            self._uc_list_workspace_options()
+        if step in ("password_required", "code_required", "workspace_required", "completed", "error"):
+            logger.info("[ChatGPT] %s登录初始步骤: %s | detail=%s", actor_label, step, detail)
+            return {"step": step, "detail": detail}
+
+        email_input = self._uc_visible_element(self.UC_EMAIL_INPUT_SELECTORS, timeout=15)
+        if not email_input:
+            try:
+                SCREENSHOT_DIR.mkdir(exist_ok=True)
+                self.uc_driver.save_screenshot(str(SCREENSHOT_DIR / "admin_login_missing_email_uc.png"))
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"未找到{actor_label}邮箱输入框，当前 URL: {self.uc_driver.current_url}，"
+                f"页面片段: {self._uc_body_excerpt(self.uc_driver)}"
+            )
+
+        final_step, final_detail = "unknown", self.uc_driver.current_url
+        for attempt in range(1, 4):
+            email_input = self._uc_visible_element(self.UC_EMAIL_INPUT_SELECTORS, timeout=3) or email_input
+            try:
+                email_input.clear()
+                email_input.send_keys(email)
+            except Exception:
+                self.uc_driver.execute_script("arguments[0].value = arguments[1];", email_input, email)
+            time.sleep(0.5)
+            clicked = self._uc_click_auth_button(email_input, ["Continue", "继续", "Log in", "登录"])
+            logger.info("[ChatGPT] %s邮箱已提交（第 %d 次）| clicked=%s", actor_label, attempt, clicked)
+            final_step, final_detail = self._uc_wait_for_login_step(
+                {"email_required", "password_required", "code_required", "workspace_required", "completed", "error"},
+                timeout=12,
+            )
+            self._uc_log_login_state(f"{actor_label}邮箱提交后（第 {attempt} 次）")
+            if final_step == "workspace_required":
+                self._uc_list_workspace_options()
+            if final_step != "email_required":
+                break
+            logger.warning(
+                "[ChatGPT] %s邮箱提交后仍停留在邮箱步骤（第 %d 次）| URL=%s | body=%s",
+                actor_label,
+                attempt,
+                self.uc_driver.current_url,
+                self._uc_body_excerpt(self.uc_driver),
+            )
+
+        if final_step == "email_required":
+            raise RuntimeError(
+                f"{actor_label}邮箱提交后仍停留在邮箱步骤，请检查登录页是否拦截/未响应。"
+                f" 当前 URL: {self.uc_driver.current_url}，页面片段: {self._uc_body_excerpt(self.uc_driver)}"
+            )
+
+        logger.info("[ChatGPT] %s邮箱提交结果: %s | detail=%s", actor_label, final_step, final_detail)
+        return {"step": final_step, "detail": final_detail}
+
+    def _submit_login_password_uc(self, password, actor_label="账号"):
+        self.login_password = password
+        password_input = self._uc_visible_element(self.UC_PASSWORD_INPUT_SELECTORS, timeout=5)
+        if not password_input:
+            raise RuntimeError("当前不是密码输入步骤")
+        logger.info("[ChatGPT] 提交%s密码前 | URL=%s", actor_label, self.uc_driver.current_url)
+        password_input.clear()
+        password_input.send_keys(password)
+        time.sleep(0.5)
+        self._uc_click_auth_button(password_input, ["Continue", "继续", "Log in", "登录"])
+        time.sleep(8)
+        self._uc_log_login_state(f"{actor_label}密码提交后")
+        step, detail = self._uc_detect_login_step()
+        if step == "workspace_required":
+            self._uc_list_workspace_options()
+        logger.info("[ChatGPT] %s密码提交结果: %s | detail=%s", actor_label, step, detail)
+        return {"step": step, "detail": detail}
+
+    def _submit_login_code_uc(self, code, actor_label="账号"):
+        code_input = self._uc_visible_element(self.UC_CODE_INPUT_SELECTORS, timeout=8)
+        if not code_input:
+            single_inputs = []
+            try:
+                single_inputs = [
+                    el for el in self.uc_driver.find_elements("css selector", 'input[maxlength="1"]') if el.is_displayed()
+                ]
+            except Exception:
+                single_inputs = []
+            if len(single_inputs) >= 4:
+                logger.info("[ChatGPT] 检测到 %d 个单字符验证码输入框", len(single_inputs))
+                for i, char in enumerate(code):
+                    if i < len(single_inputs):
+                        single_inputs[i].clear()
+                        single_inputs[i].send_keys(char)
+                        time.sleep(0.1)
+                time.sleep(0.5)
+                self._uc_click_auth_button(labels=["Continue", "继续", "Verify"])
+                time.sleep(8)
+                self._uc_log_login_state(f"{actor_label}验证码提交后（单字符）")
+                step, detail = self._uc_detect_login_step()
+                if step == "workspace_required":
+                    self._uc_list_workspace_options()
+                return {"step": step, "detail": detail}
+
+        if not code_input:
+            try:
+                SCREENSHOT_DIR.mkdir(exist_ok=True)
+                self.uc_driver.save_screenshot(str(SCREENSHOT_DIR / "admin_login_code_not_found_uc.png"))
+            except Exception:
+                pass
+            logger.error("[ChatGPT] 找不到%s验证码输入框 | URL=%s", actor_label, self.uc_driver.current_url)
+            raise RuntimeError("找不到验证码输入框，页面可能已跳转或验证码已过期")
+
+        logger.info("[ChatGPT] 提交%s验证码前 | URL=%s | code_len=%d", actor_label, self.uc_driver.current_url, len(code))
+        code_input.clear()
+        code_input.send_keys(code)
+        time.sleep(0.5)
+        self._uc_click_auth_button(code_input, ["Continue", "继续", "Verify"])
+        time.sleep(8)
+        self._uc_log_login_state(f"{actor_label}验证码提交后")
+        step, detail = self._uc_detect_login_step()
+        if step == "workspace_required":
+            self._uc_list_workspace_options()
+        logger.info("[ChatGPT] %s验证码提交结果: %s | detail=%s", actor_label, step, detail)
+        return {"step": step, "detail": detail}
+
+    def _uc_list_workspace_options(self):
+        if not self._uc_is_workspace_selection_page():
+            return []
+        try:
+            labels = self.uc_driver.execute_script(
+                """
+                const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+                const results = [];
+                const seen = new Set();
+                for (const el of document.querySelectorAll('*')) {
+                    const directText = Array.from(el.childNodes)
+                        .filter(n => n.nodeType === 3)
+                        .map(n => (n.textContent || '').trim())
+                        .filter(t => t.length > 0)
+                        .join(' ');
+                    if (!directText || directText.length > 50 || directText.length < 2) continue;
+                    if (seen.has(directText)) continue;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) continue;
+                    const tag = el.tagName.toLowerCase();
+                    if (['h1', 'h2', 'h3', 'title', 'head', 'script', 'style'].includes(tag)) continue;
+                    seen.add(directText);
+                    results.push(directText);
+                }
+                return results;
+                """
+            )
+        except Exception:
+            labels = []
+        candidates = []
+        seen = set()
+        for text in labels or []:
+            text = _normalize_workspace_label(text)
+            if text in seen:
+                continue
+            kind = _workspace_candidate_kind(text)
+            if kind is None:
+                continue
+            seen.add(text)
+            candidates.append({"id": str(len(candidates)), "label": text, "kind": kind})
+        logger.info("[ChatGPT] workspace 候选数: %d | candidates=%s", len(candidates), [c["label"] for c in candidates])
+        self.workspace_options_cache = candidates
+        return candidates
+
+    def _uc_click_workspace_option_by_label(self, label):
+        try:
+            result = self.uc_driver.execute_script(
+                """
+                const label = arguments[0];
+                const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+                const lower = (s) => norm(s).toLowerCase();
+                const targetLabel = lower(label);
+                const actionWords = ['open', '打开', 'launch', 'continue', '进入'];
+                const interactive = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+                const candidates = [];
+                const collectCandidate = (el, cardText, depth) => {
+                    const idx = interactive.indexOf(el);
+                    if (idx < 0) return;
+                    const btnText = norm(el.textContent);
+                    const btnLower = btnText.toLowerCase();
+                    let score = 100 - depth;
+                    if (btnLower === targetLabel) score += 30;
+                    if (actionWords.some(word => btnLower.includes(word))) score += 100;
+                    if (lower(cardText).startsWith(targetLabel)) score += 15;
+                    candidates.push({buttonIndex: idx, buttonText: btnText, cardText: norm(cardText).slice(0, 160), score});
+                };
+                for (const el of interactive) {
+                    let node = el;
+                    for (let depth = 0; depth < 7 && node && node.parentElement; depth++) {
+                        node = node.parentElement;
+                        const cardText = norm(node.textContent);
+                        if (!cardText || !lower(cardText).includes(targetLabel)) continue;
+                        collectCandidate(el, cardText, depth);
+                        break;
+                    }
+                }
+                if (!candidates.length) return {clicked: false, reason: 'no-match'};
+                candidates.sort((a, b) => b.score - a.score);
+                const chosen = candidates[0];
+                const btn = interactive[chosen.buttonIndex];
+                if (!btn) return {clicked: false, reason: 'missing-button', chosen};
+                btn.click();
+                return {clicked: true, buttonText: chosen.buttonText, cardText: chosen.cardText};
+                """,
+                label,
+            )
+        except Exception as exc:
+            logger.warning("[ChatGPT] UC 点击 workspace(%s) 失败: %s", label, exc)
+            result = None
+        if result and result.get("clicked"):
+            logger.info("[ChatGPT] UC 点击 workspace 动作成功: label=%s button=%s", label, result.get("buttonText", ""))
+            return True
+        return False
+
+    def _select_workspace_option_uc(self, option_id):
+        options = self._uc_list_workspace_options()
+        for option in options:
+            if option["id"] != str(option_id):
+                continue
+            label = option["label"]
+            logger.info("[ChatGPT] 用户选择 workspace: %s", label)
+            if not self._uc_click_workspace_option_by_label(label):
+                raise RuntimeError(f"未找到可点击的 workspace 选项: {label}")
+            time.sleep(8)
+            self.workspace_options_cache = []
+            self._uc_log_login_state("选择 workspace 后")
+            if self._uc_is_chatgpt_ready_url():
+                return {"step": "completed", "detail": None}
+            step, detail = self._uc_detect_login_step()
+            logger.info("[ChatGPT] 选择 workspace 后结果: %s | detail=%s", step, detail)
+            return {"step": step, "detail": detail}
+        raise RuntimeError(f"无效的 workspace 选项: {option_id}")
+
+    def _complete_login_uc(self, persist_admin_state=False):
+        if "chatgpt.com" not in (self.uc_driver.current_url or "").lower():
+            self._uc_open(self.uc_driver, "https://chatgpt.com/")
+        session_token = self._uc_extract_session_token()
+        if not session_token:
+            raise RuntimeError("登录成功后未提取到 session token")
+        if "auth" in (self.uc_driver.current_url or "").lower():
+            self._uc_open(self.uc_driver, "https://chatgpt.com/")
+        session = self._uc_fetch_json(self.uc_driver, "/api/auth/session")
+        session_data = session.get("data") if isinstance(session, dict) else None
+        self.access_token = session_data.get("accessToken") if isinstance(session_data, dict) else ""
+        if not self.access_token:
+            raise RuntimeError("登录成功后未能获取 access token")
+        account_id = self._extract_account_id_from_access_token()
+        workspace_name = ""
+        if account_id:
+            settings = self._uc_fetch_json(
+                self.uc_driver,
+                f"/backend-api/accounts/{account_id}/settings",
+                {"authorization": f"Bearer {self.access_token}", "chatgpt-account-id": account_id},
+            )
+            settings_data = settings.get("data") if isinstance(settings, dict) else None
+            if isinstance(settings_data, dict):
+                workspace_name = settings_data.get("workspace_name") or ""
+        self.account_id = account_id or self.account_id
+        self.workspace_name = workspace_name or self.workspace_name
+
+        payload = dict(
+            email=self.login_email or "",
+            session_token=session_token,
+            account_id=self.account_id,
+            workspace_name=self.workspace_name,
+        )
+        if self.login_password:
+            payload["password"] = self.login_password
+        if persist_admin_state:
+            update_admin_state(**payload)
+            logger.info("[ChatGPT] 管理员登录状态已保存")
+        return {
+            "email": self.login_email or "",
+            "password": self.login_password or "",
+            "session_token": session_token,
+            "account_id": self.account_id,
+            "workspace_name": self.workspace_name,
+            "session_len": len(session_token),
+        }
 
     def _import_admin_session_uc(self, email, session_token):
         email, session_token = self._normalize_import_inputs(email, session_token)

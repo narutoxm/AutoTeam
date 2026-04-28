@@ -48,6 +48,7 @@ COMMON_CONFIGS = [
     ("PLAYWRIGHT_HEADLESS", "Playwright 无头模式（true/false）", "false", True),
     ("PLAYWRIGHT_PROXY_URL", "Playwright 浏览器代理 URL（可选，如 socks5://host:port）", "", True),
     ("PLAYWRIGHT_PROXY_BYPASS", "Playwright 代理绕过列表（可选，如 localhost,127.0.0.1）", "", True),
+    ("CHATGPT_ADMIN_LOGIN_BACKEND", "管理员邮箱登录后端（uc/playwright）", "uc", True),
     ("CHATGPT_SESSION_IMPORT_BACKEND", "管理员 session_token 导入后端（uc/playwright）", "uc", True),
     ("SELENIUMBASE_UC_RECONNECT_TIME", "SeleniumBase UC 重连等待秒数", "6", True),
     ("API_KEY", "API 鉴权密钥（回车自动生成）", "", False),
@@ -110,7 +111,7 @@ def get_setup_fields(values: dict[str, str] | None = None) -> list[dict[str, obj
                 {"value": "account-admin", "label": "管理员"},
                 {"value": "standard-user", "label": "普通成员"},
             ]
-        elif key == "CHATGPT_SESSION_IMPORT_BACKEND":
+        elif key in {"CHATGPT_ADMIN_LOGIN_BACKEND", "CHATGPT_SESSION_IMPORT_BACKEND"}:
             field_type = "select"
             options = [
                 {"value": "uc", "label": "UC（SeleniumBase）"},

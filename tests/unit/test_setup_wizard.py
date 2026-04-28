@@ -111,8 +111,13 @@ def test_get_setup_fields_includes_cpa_sync_option():
 
 def test_get_setup_fields_includes_session_import_backend_option():
     fields = setup_wizard.get_setup_fields({"EMAIL_PROVIDER": "cloudflare_temp_email"})
+    admin_backend = next(field for field in fields if field["key"] == "CHATGPT_ADMIN_LOGIN_BACKEND")
     backend = next(field for field in fields if field["key"] == "CHATGPT_SESSION_IMPORT_BACKEND")
 
+    assert admin_backend["type"] == "select"
+    assert admin_backend["default"] == "uc"
+    assert admin_backend["optional"] is True
+    assert {option["value"] for option in admin_backend["options"]} == {"uc", "playwright"}
     assert backend["type"] == "select"
     assert backend["default"] == "uc"
     assert backend["optional"] is True

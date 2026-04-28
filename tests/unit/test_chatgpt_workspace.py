@@ -94,6 +94,15 @@ def test_import_admin_session_uses_configured_backend(monkeypatch):
     ]
 
 
+def test_begin_login_uses_configured_uc_backend(monkeypatch):
+    client = chatgpt_api.ChatGPTTeamAPI()
+
+    monkeypatch.setattr(chatgpt_api, "CHATGPT_ADMIN_LOGIN_BACKEND", "uc")
+    monkeypatch.setattr(client, "_begin_login_uc", lambda email, actor_label="账号": {"step": "code_required"})
+
+    assert client.begin_login("admin@example.com", actor_label="管理员") == {"step": "code_required"}
+
+
 def test_stop_closes_uc_driver():
     class FakeUcDriver:
         def __init__(self):
